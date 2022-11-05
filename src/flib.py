@@ -133,7 +133,7 @@ def get_book_by_id(book_id):
     else:
         book.cover = None
 
-    format_li_list = target_div.find_all('a', string=re.compile('fb2|epub|mobi|pdf'))
+    format_li_list = target_div.find_all('a', string=re.compile('fb2|epub|mobi|pdf|djvu'))
     for a in format_li_list:
         b_format = a.text
         link = a.get('href')
