@@ -1,6 +1,7 @@
 books/
 bot_ico/
 .vscode
+.idea
 # Created by https://www.toptal.com/developers/gitignore/api/visualstudiocode,python,django
 # Edit at https://www.toptal.com/developers/gitignore?templates=visualstudiocode,python,django
 
