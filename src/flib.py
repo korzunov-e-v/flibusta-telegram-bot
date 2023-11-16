@@ -19,7 +19,7 @@ class Book:
         self.cover = ''
 
     def __str__(self):
-        return '{} - {} ({})'.format(self.title, self.author, self.id)
+        return f'{self.title} - {self.author} ({self.id})'
 
 
 def get_page(url):

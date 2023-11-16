@@ -1,13 +1,6 @@
-#!/usr/bin/env python
-# pylint: disable=C0116,W0613
-# This program is dedicated to the public domain under the CC0 license.
-
-"""
-Basic example for a bot that uses inline keyboards. For an in-depth
-explanation, check out
-https://github.com/python-telegram-bot/python-telegram-bot/wiki/InlineKeyboard-Example.
-"""
 import logging
+from urllib.error import HTTPError
+
 import flib
 import os
 
@@ -16,22 +9,14 @@ from telegram.ext import Updater, CommandHandler
 from telegram.ext import CallbackQueryHandler, CallbackContext
 
 from telegram.ext import MessageHandler, Filters
-from dotenv import dotenv_values
 
-dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
-if os.path.exists(dotenv_path):
-    settings = dotenv_values(dotenv_path)
-
-formatter = logging.Formatter(
-    "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     encoding="utf-8",
     level=logging.INFO,
 )
-
-logger = logging.getLogger(__name__)
 
 logger_search = logging.getLogger("search_history")
 handler = logging.FileHandler(filename="search_log.log", encoding="utf-8")
@@ -61,15 +46,20 @@ def find_the_book(update: Update, context: CallbackContext) -> None:
     search_string = update.message.text
     mes = update.message.reply_text("Подождите, идёт поиск...")
 
-    if "\n" in search_string:
-        title, author = search_string.split("\n", maxsplit=1)
-        libr = flib.scrape_books_mbl(title, author)
-    else:
-        libr = flib.scrape_books(search_string)
+    try:
+        if "\n" in search_string:
+            title, author = search_string.split("\n", maxsplit=1)
+            libr = flib.scrape_books_mbl(title, author)
+        else:
+            libr = flib.scrape_books(search_string)
+    except (AttributeError, HTTPError) as e:
+        context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+        update.message.reply_text("Произошла ошибка на сервере.")
+        logger_search.error("Access error")
+        return
 
     if libr is None:
-        context.bot.deleteMessage(
-            chat_id=mes.chat_id, message_id=mes.message_id)
+        context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
         update.message.reply_text("К сожалению, ничего не найдено =(")
     else:
         kb = []
@@ -77,14 +67,12 @@ def find_the_book(update: Update, context: CallbackContext) -> None:
             book = libr[i]
             text = f"{book.title} - {book.author}"
             callback_data = "find_book_by_id " + book.id
-            kb.append([InlineKeyboardButton(text,
-                                            callback_data=callback_data)])
+            kb.append([InlineKeyboardButton(text, callback_data=callback_data)])
 
         reply_markup = InlineKeyboardMarkup(kb)
 
         update.message.reply_text("Выберите книгу:", reply_markup=reply_markup)
-        context.bot.deleteMessage(
-            chat_id=mes.chat_id, message_id=mes.message_id)
+        context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
 
 
 def button(update: Update, context: CallbackContext) -> None:
@@ -194,24 +182,10 @@ def help_command(update: Update, context: CallbackContext) -> None:
     update.message.reply_text("Нажмите /start чтобы начать")
 
 
-def main() -> None:
-    """Run the bot."""
-    # Create the Updater and pass it your bot`s token.
-    TOKEN = settings["TOKEN"]
-    updater = Updater(TOKEN)
-
+def get_updater(token: str) -> Updater:
+    updater = Updater(token)
     updater.dispatcher.add_handler(CommandHandler("start", start_callback))
     updater.dispatcher.add_handler(CallbackQueryHandler(button))
     updater.dispatcher.add_handler(CommandHandler("help", help_command))
     updater.dispatcher.add_handler(MessageHandler(Filters.text, find_the_book))
-
-    # Start the Bot
-    updater.start_polling()
-
-    # Run the bot until the user presses Ctrl-C or the process receives SIGINT,
-    # SIGTERM or SIGABRT
-    updater.idle()
-
-
-if __name__ == "__main__":
-    main()
+    return updater

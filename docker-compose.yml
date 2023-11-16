@@ -1,0 +1,15 @@
+version: '3.6'
+
+services:
+  tg-bot:
+    container_name: flibusta-tg-bot
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python src/srv.py
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./books:/srv/books
+      - ./search_log.log:/srv/search_log.log
