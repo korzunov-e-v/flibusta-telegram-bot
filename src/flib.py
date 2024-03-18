@@ -44,7 +44,7 @@ def scrape_books(request_text):
     if len(target_ul_list) == 0:
         return None
 
-    target_ul=target_ul_list[0]
+    target_ul = target_ul_list[0]
     li_list = target_ul.find_all("li")
 
     link_list = [a for a in (("http://flibusta.is" + li.a.get('href') + '/') for li in li_list)]
@@ -133,7 +133,7 @@ def get_book_by_id(book_id):
     else:
         book.cover = None
 
-    format_li_list = target_div.find_all('a', string=re.compile('fb2|epub|mobi|pdf|djvu'))
+    format_li_list = target_div.find_all('a', string=re.compile(r'\(fb2\)|\(epub\)|\(mobi\)|\(скачать pdf\)|\(djvu\)'))
     for a in format_li_list:
         b_format = a.text
         link = a.get('href')
@@ -157,7 +157,7 @@ def download_book(book: Book, b_format):
 
     try:
         b_response = requests.get(book_url, timeout=10)
-    except requests.exceptions.Timeout as e: 
+    except requests.exceptions.Timeout as e:
         return None
 
     if not b_response.ok:
