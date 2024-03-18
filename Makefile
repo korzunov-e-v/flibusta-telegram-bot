@@ -5,7 +5,7 @@ up:
 down:
 	docker compose -f docker-compose.yml down
 logs:
-	docker compose -f docker-compose.yml logs --tail=100 -f flibusta-tg-bot
+	docker compose -f docker-compose.yml logs --tail=100
 restart:
 	docker compose -f docker-compose.yml restart flibusta-tg-bot
 exec:
