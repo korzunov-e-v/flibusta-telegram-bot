@@ -13,3 +13,4 @@ services:
     volumes:
       - ./books:/srv/books
       - ./search_log.log:/srv/search_log.log
+      - ./src:/srv/src
