@@ -1,16 +1,17 @@
 import logging
+import traceback
 from urllib.error import HTTPError
 
 import flib
-import os
 
+import custom_logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler
 from telegram.ext import CallbackQueryHandler, CallbackContext
 
 from telegram.ext import MessageHandler, Filters
 
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+formatter = custom_logging.CustomJSONFormatter()
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -27,21 +28,35 @@ logger_search.addHandler(handler)
 
 def start_callback(update: Update, context: CallbackContext):
     update.message.reply_text(
-        "Введите название книги (без автора) ИЛИ добавьте фамилию автора на "
-        "новой строке. \n\nПример:\n\n1984\nОруэлл"
+        "Введите название книги (без автора) ИЛИ добавьте фамилию автора на новой строке. \n"
+        "\n"
+        "Пример:\n"
+        "\n"
+        "1984\n"
+        "Оруэлл"
     )
 
 
 def find_the_book(update: Update, context: CallbackContext) -> None:
-    log_command = "find_the_book".ljust(20)
+    log_command = "find_the_book"
     log_user_id = update.effective_user.id
     log_user_name = update.effective_user.name
     log_user_full_name = update.effective_user.full_name
-    log_search_string = update.message.text.replace("\n", " - ")
+    log_book_name = update.message.text.split('\n')[0]
+    if len(update.message.text.split('\n')) == 2:
+        log_author = update.message.text.split('\n')[1]
+    else:
+        log_author = None
     logger_search.info(
-        f"{log_command}  {log_user_id} {log_user_name} "
-        f"({log_user_full_name}) - {log_search_string}"
-    )
+        msg="find the book",
+        extra={
+            "command": log_command,
+            "user_id": log_user_id,
+            "user_name": log_user_name,
+            "user_full_name": log_user_full_name,
+            "book_name": log_book_name,
+            "author": log_author,
+        })
 
     search_string = update.message.text
     mes = update.message.reply_text("Подождите, идёт поиск...")
@@ -55,7 +70,9 @@ def find_the_book(update: Update, context: CallbackContext) -> None:
     except (AttributeError, HTTPError) as e:
         context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
         update.message.reply_text("Произошла ошибка на сервере.")
-        logger_search.error("Access error")
+        print("Traceback full:")
+        print(traceback.format_exc())
+        logger_search.error(f"Access error {e}", extra={"exc": e})
         return
 
     if libr is None:
@@ -93,16 +110,20 @@ def button(update: Update, context: CallbackContext) -> None:
 
 
 def find_book_by_id(book_id, update: Update, context: CallbackContext):
-
-    log_command = "find_book_by_id".ljust(20)
+    log_command = "find_book_by_id"
     log_user_id = update.effective_user.id
     log_user_name = update.effective_user.name
     log_user_full_name = update.effective_user.full_name
     log_search_string = book_id
     logger_search.info(
-        f"{log_command}  {log_user_id} {log_user_name} "
-        f"({log_user_full_name}) - {log_search_string}"
-    )
+        msg="find the book",
+        extra={
+            "command": log_command,
+            "user_id": log_user_id,
+            "user_name": log_user_name,
+            "user_full_name": log_user_full_name,
+            "search_string": log_search_string,
+        })
 
     mes = context.bot.send_message(
         chat_id=update.effective_chat.id, text="Подождите, идёт загрузка..."
@@ -139,15 +160,19 @@ def find_book_by_id(book_id, update: Update, context: CallbackContext):
 
 
 def get_book_by_format(data: str, update: Update, context: CallbackContext):
-
-    log_command = "get_book_by_format".ljust(20)
+    log_command = "get_book_by_format"
     log_user_id = update.effective_user.id
     log_user_name = update.effective_user.name
     log_user_full_name = update.effective_user.full_name
     logger_search.info(
-        f"{log_command}  {log_user_id} {log_user_name} "
-        f"({log_user_full_name}) - {data}"
-    )
+        msg="get book by format",
+        extra={
+            "command": log_command,
+            "user_id": log_user_id,
+            "user_name": log_user_name,
+            "user_full_name": log_user_full_name,
+            "data": data,
+        })
 
     mes = context.bot.send_message(
         chat_id=update.effective_chat.id, text="Подождите, идёт скачивание..."
@@ -165,10 +190,15 @@ def get_book_by_format(data: str, update: Update, context: CallbackContext):
         context.bot.deleteMessage(
             chat_id=mes.chat_id, message_id=mes.message_id)
     else:
-        logger_search.info(
-            f"{log_command}  {log_user_id} {log_user_name} "
-            f"({log_user_full_name}) - {data} - download error"
-        )
+        logger_search.error(
+            msg="download error",
+            extra={
+                "command": log_command,
+                "user_id": log_user_id,
+                "user_name": log_user_name,
+                "user_full_name": log_user_full_name,
+                "data": data,
+            })
         context.bot.deleteMessage(
             chat_id=mes.chat_id, message_id=mes.message_id)
         mes = context.bot.send_message(

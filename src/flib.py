@@ -5,8 +5,8 @@ import urllib.parse
 import os
 import re
 
-all_formats = ['fb2', 'epub', 'mobi', 'pdf']
-site = 'http://flibusta.is'
+ALL_FORMATS = ['fb2', 'epub', 'mobi', 'pdf']
+SITE = 'http://flibusta.is'
 
 
 class Book:
@@ -31,8 +31,8 @@ def get_page(url):
     return soup
 
 
-def scrape_books(request_text):
-    query_text = urllib.parse.quote(request_text)
+def scrape_books(title: str) -> list[Book] | None:
+    query_text = urllib.parse.quote(title)
     url_mask = "http://flibusta.is/booksearch?ask={request_str}&chb=on"
     url = url_mask.format(request_str=query_text)
 
@@ -73,7 +73,7 @@ def scrape_books(request_text):
     return result
 
 
-def scrape_books_mbl(title, author):
+def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
     title_q = urllib.parse.quote(title)
     author_q = urllib.parse.quote(author)
     url = f"http://flibusta.is/makebooklist?ab=ab1&t={title_q}&ln={author_q}&sort=sd2&"
@@ -119,7 +119,7 @@ def scrape_books_mbl(title, author):
 
 def get_book_by_id(book_id):
     book = Book(book_id)
-    book.link = site + '/b/' + book_id + '/'
+    book.link = SITE + '/b/' + book_id + '/'
 
     sp = get_page(book.link)
     target_div = sp.find('div', attrs={'class': 'clear-block', 'id': 'main'})
@@ -129,7 +129,7 @@ def get_book_by_id(book_id):
 
     target_img = target_div.find('img', attrs={'alt': 'Cover image'})
     if target_img:
-        book.cover = site + target_img.get('src')
+        book.cover = SITE + target_img.get('src')
     else:
         book.cover = None
 
@@ -137,7 +137,7 @@ def get_book_by_id(book_id):
     for a in format_li_list:
         b_format = a.text
         link = a.get('href')
-        book.formats[b_format] = site + link
+        book.formats[b_format] = SITE + link
 
     book.author = target_h1.findNext('a').text
 
