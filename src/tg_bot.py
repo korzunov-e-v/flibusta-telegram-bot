@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import traceback
 from urllib.error import HTTPError
 
@@ -20,11 +21,16 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-logger_search = logging.getLogger("search_history")
-handler = logging.FileHandler(filename="search_log.log", encoding="utf-8")
-handler.setLevel(logging.INFO)
-handler.setFormatter(formatter)
-logger_search.addHandler(handler)
+logger = logging.getLogger(__name__)
+logger.propagate = False
+file_handler = logging.FileHandler(filename="search_log.log", encoding="utf-8")
+stream_handler = logging.StreamHandler(stream=sys.stdout)
+file_handler.setLevel(logging.INFO)
+stream_handler.setLevel(logging.INFO)
+file_handler.setFormatter(formatter)
+stream_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 
 def start_callback(update: Update, context: CallbackContext):
@@ -48,7 +54,7 @@ def find_the_book(update: Update, context: CallbackContext) -> None:
         log_author = update.message.text.split('\n')[1]
     else:
         log_author = None
-    logger_search.info(
+    logger.info(
         msg="find the book",
         extra={
             "command": log_command,
@@ -73,7 +79,7 @@ def find_the_book(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("Произошла ошибка на сервере.")
         print("Traceback full:")
         print(traceback.format_exc())
-        logger_search.error(f"Access error {e}", extra={"exc": e})
+        logger.error(f"Access error {e}", extra={"exc": e})
         return
 
     if libr is None:
@@ -116,7 +122,7 @@ def find_book_by_id(book_id, update: Update, context: CallbackContext):
     log_user_name = update.effective_user.name
     log_user_full_name = update.effective_user.full_name
     log_search_string = book_id
-    logger_search.info(
+    logger.info(
         msg="find the book",
         extra={
             "command": log_command,
@@ -165,7 +171,7 @@ def get_book_by_format(data: str, update: Update, context: CallbackContext):
     log_user_id = update.effective_user.id
     log_user_name = update.effective_user.name
     log_user_full_name = update.effective_user.full_name
-    logger_search.info(
+    logger.info(
         msg="get book by format",
         extra={
             "command": log_command,
@@ -191,7 +197,7 @@ def get_book_by_format(data: str, update: Update, context: CallbackContext):
         context.bot.deleteMessage(
             chat_id=mes.chat_id, message_id=mes.message_id)
     else:
-        logger_search.error(
+        logger.error(
             msg="download error",
             extra={
                 "command": log_command,
