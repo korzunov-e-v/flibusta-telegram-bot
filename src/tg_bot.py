@@ -208,7 +208,7 @@ def get_book_by_format(data: str, update: Update, context: CallbackContext):
             })
         context.bot.deleteMessage(
             chat_id=mes.chat_id, message_id=mes.message_id)
-        mes = context.bot.send_message(
+        context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="Произошла ошибка на сервере."
         )
