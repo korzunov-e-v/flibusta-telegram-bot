@@ -188,14 +188,11 @@ def get_book_by_format(data: str, update: Update, context: CallbackContext):
     book_id, book_format = data.split("+")
     book = flib.get_book_by_id(book_id)
 
-    b_full_path = flib.download_book(book, book_format)
+    b_content, b_filename = flib.download_book(book, book_format)
 
-    if b_full_path:
-        file = open(os.path.join(b_full_path), "rb")
-        context.bot.send_document(
-            chat_id=update.effective_chat.id, document=file)
-        context.bot.deleteMessage(
-            chat_id=mes.chat_id, message_id=mes.message_id)
+    if b_filename:
+        context.bot.send_document(chat_id=update.effective_chat.id, document=b_content, filename=b_filename)
+        context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
     else:
         logger.error(
             msg="download error",

@@ -152,7 +152,6 @@ def download_book_cover(book):
 
 
 def download_book(book: Book, b_format):
-    book_id = book.id
     book_url = book.formats[b_format]
 
     try:
@@ -168,8 +167,4 @@ def download_book(book: Book, b_format):
     if b_filename.endswith('.fb2.zip'):
         b_filename = b_filename.removesuffix('.zip')
 
-    b_full_path = os.path.join(os.getcwd(), "books", book_id, b_filename)
-    os.makedirs(os.path.dirname(b_full_path), exist_ok=True)
-    open(os.path.join(b_full_path), "wb").write(b_response.content)
-
-    return b_full_path
+    return b_response.content, b_filename
