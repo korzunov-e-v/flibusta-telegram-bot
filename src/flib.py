@@ -17,6 +17,7 @@ class Book:
         self.link = ''
         self.formats = {}
         self.cover = ''
+        self.size = ''
 
     def __str__(self):
         return f'{self.title} - {self.author} ({self.id})'
@@ -126,6 +127,7 @@ def get_book_by_id(book_id):
 
     target_h1 = target_div.find('h1', attrs={'class': 'title'})
     book.title = target_h1.text
+    book.size = sp.find('span', attrs={'style': 'size'}).text
 
     target_img = target_div.find('img', attrs={'alt': 'Cover image'})
     if target_img:
