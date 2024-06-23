@@ -136,7 +136,7 @@ def find_book_by_id(book_id, update: Update, context: CallbackContext):
         chat_id=update.effective_chat.id, text="Подождите, идёт загрузка..."
     )
     book = flib.get_book_by_id(book_id)
-    capt = "\U0001F4D6 {title}\n\U0001F5E3 {author}\n\U0001FAB6 {size}\n\U0001F310 (понадобится VPN) {url}".format(
+    capt = "\U0001F4D6 {title}\n\U0001F5E3 {author}\n\U0001FAB6 {size}\n\U0001F310 {url}".format(
         author=book.author, title=book.title, url=book.link, size=book.size,
     )
 
