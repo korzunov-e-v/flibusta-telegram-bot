@@ -1,0 +1,26 @@
+name: Deploy
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute local script
+        uses: appleboy/ssh-action@master
+        with:
+          host: 161.35.29.52
+          username: user1
+          key: ${{ secrets.DO_CERT }}
+          script: |
+            cd ~/projects/flibusta-telegram-bot/ && \
+            git pull && \
+            make build && \
+            make up
