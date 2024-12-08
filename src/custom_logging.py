@@ -4,6 +4,8 @@ from datetime import datetime, UTC
 
 from json_log_formatter import JSONFormatter, _json_serializable
 
+logging.getLogger("httpx").setLevel(logging.ERROR)
+
 
 class CustomJSONFormatter(JSONFormatter):
     def to_json(self, record):
@@ -50,4 +52,4 @@ def get_logger(name: str):
     stream_handler.setLevel(logging.INFO)
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
-    return
+    return logger

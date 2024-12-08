@@ -3,9 +3,7 @@ import traceback
 from urllib.error import HTTPError
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Updater, CommandHandler
-from telegram.ext import CallbackQueryHandler, CallbackContext
-from telegram.ext import MessageHandler, Filters
+from telegram.ext import CallbackContext
 
 from src import flib
 from src.custom_logging import get_logger
@@ -13,8 +11,8 @@ from src.custom_logging import get_logger
 logger = get_logger(__name__)
 
 
-def start_callback(update: Update, _: CallbackContext):
-    update.message.reply_text(
+async def start_callback(update: Update, _: CallbackContext):
+    await update.message.reply_text(
             "Введите название книги (без автора) ИЛИ добавьте фамилию автора на новой строке. \n"
             "\n"
             "Пример:\n"
@@ -24,7 +22,7 @@ def start_callback(update: Update, _: CallbackContext):
     )
 
 
-def find_the_book(update: Update, context: CallbackContext) -> None:
+async def find_the_book(update: Update, context: CallbackContext) -> None:
     if len(update.message.text.split('\n')) == 2:
         log_author = update.message.text.split('\n')[1]
     else:
@@ -42,7 +40,7 @@ def find_the_book(update: Update, context: CallbackContext) -> None:
     )
 
     search_string = update.message.text
-    mes = update.message.reply_text("Подождите, идёт поиск...")
+    mes = await update.message.reply_text("Подождите, идёт поиск...")
 
     err_author = False
     try:
@@ -67,18 +65,18 @@ def find_the_book(update: Update, context: CallbackContext) -> None:
                 libr.append(book_by_id)
 
     except (AttributeError, HTTPError) as e:
-        context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
-        update.message.reply_text("Произошла ошибка на сервере.")
+        await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+        await update.message.reply_text("Произошла ошибка на сервере.")
         print("Traceback full:")
         print(traceback.format_exc())
         logger.error(f"Access error {e}", extra={"exc": e})
         return
 
     if not libr:
-        context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
-        update.message.reply_text("К сожалению, ничего не найдено =(")
+        await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+        await update.message.reply_text("К сожалению, ничего не найдено =(")
         if err_author:
-            update.message.reply_text("Вероятно вместо фамилии автора на второй строке было указано что-то ещё")
+            await update.message.reply_text("Вероятно вместо фамилии автора на второй строке было указано что-то ещё")
     else:
         kbs = []
         kb = []
@@ -93,24 +91,24 @@ def find_the_book(update: Update, context: CallbackContext) -> None:
         if kb:
             kbs.append(kb)
 
-        context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+        await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
         for kb in kbs:
             reply_markup = InlineKeyboardMarkup(kb)
-            update.message.reply_text("Выберите книгу:", reply_markup=reply_markup)
+            await update.message.reply_text("Выберите книгу:", reply_markup=reply_markup)
 
 
-def button(update: Update, context: CallbackContext) -> None:
+async def button(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
 
     command, arg = query.data.split(" ", maxsplit=1)
     if command == "find_book_by_id":
-        find_book_by_id(book_id=arg, update=update, context=context)
+        await find_book_by_id(book_id=arg, update=update, context=context)
     if command == "get_book_by_format":
-        get_book_by_format(data=arg, update=update, context=context)
+        await get_book_by_format(data=arg, update=update, context=context)
 
 
-def find_book_by_id(book_id, update: Update, context: CallbackContext):
+async def find_book_by_id(book_id, update: Update, context: CallbackContext):
     log_command = "find_book_by_id"
     log_user_id = update.effective_user.id
     log_user_name = update.effective_user.name
@@ -126,7 +124,7 @@ def find_book_by_id(book_id, update: Update, context: CallbackContext):
                 "search_string": log_search_string,
             })
 
-    mes = context.bot.send_message(
+    mes = await context.bot.send_message(
             chat_id=update.effective_chat.id, text="Подождите, идёт загрузка..."
     )
     book = flib.get_book_by_id(book_id)
@@ -145,22 +143,22 @@ def find_book_by_id(book_id, update: Update, context: CallbackContext):
         flib.download_book_cover(book)
         c_full_path = os.path.join(os.getcwd(), "books", book_id, "cover.jpg")
         cover = open(os.path.join(c_full_path), "rb")
-        context.bot.send_photo(
+        await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=cover,
                 caption=capt,
                 reply_markup=reply_markup,
         )
     else:
-        context.bot.send_message(
+        await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="[обложки нет]\n\n" + capt,
                 reply_markup=reply_markup,
         )
-    context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+    await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
 
 
-def get_book_by_format(data: str, update: Update, context: CallbackContext):
+async def get_book_by_format(data: str, update: Update, context: CallbackContext):
     log_command = "get_book_by_format"
     log_user_id = update.effective_user.id
     log_user_name = update.effective_user.name
@@ -175,7 +173,7 @@ def get_book_by_format(data: str, update: Update, context: CallbackContext):
                 "data": data,
             })
 
-    mes = context.bot.send_message(
+    mes = await context.bot.send_message(
             chat_id=update.effective_chat.id, text="Подождите, идёт скачивание..."
     )
 
@@ -185,8 +183,8 @@ def get_book_by_format(data: str, update: Update, context: CallbackContext):
     b_content, b_filename = flib.download_book(book, book_format)
 
     if b_filename:
-        context.bot.send_document(chat_id=update.effective_chat.id, document=b_content, filename=b_filename)
-        context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
+        await context.bot.send_document(chat_id=update.effective_chat.id, document=b_content, filename=b_filename)
+        await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
     else:
         logger.error(
                 msg="download error",
@@ -197,22 +195,13 @@ def get_book_by_format(data: str, update: Update, context: CallbackContext):
                     "user_full_name": log_user_full_name,
                     "data": data,
                 })
-        context.bot.deleteMessage(
+        await context.bot.deleteMessage(
                 chat_id=mes.chat_id, message_id=mes.message_id)
-        context.bot.send_message(
+        await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="Произошла ошибка на сервере."
         )
 
 
-def help_command(update: Update, _: CallbackContext) -> None:
-    update.message.reply_text("Нажмите /start чтобы начать")
-
-
-def get_updater(token: str) -> Updater:
-    updater = Updater(token)
-    updater.dispatcher.add_handler(CommandHandler("start", start_callback))
-    updater.dispatcher.add_handler(CallbackQueryHandler(button))
-    updater.dispatcher.add_handler(CommandHandler("help", help_command))
-    updater.dispatcher.add_handler(MessageHandler(Filters.text, find_the_book))
-    return updater
+async def help_command(update: Update, _: CallbackContext) -> None:
+    await update.message.reply_text("Нажмите /start чтобы начать")

@@ -1,8 +1,10 @@
 import os
 
 from dotenv import dotenv_values
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler
+from telegram.ext.filters import TEXT
 
-from src.tg_bot import get_updater
+from src.tg_bot import start_callback, button, help_command, find_the_book
 
 
 def main():
@@ -11,9 +13,13 @@ def main():
     else:
         exit(404)
 
-    updater = get_updater(settings["TOKEN"])
-    updater.start_polling()
-    updater.idle()
+    app = ApplicationBuilder().token(settings["TOKEN"]).build()
+    app.add_handler(CommandHandler("start", start_callback))
+    app.add_handler(CallbackQueryHandler(button))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(MessageHandler(TEXT, find_the_book))
+
+    app.run_polling()
 
 
 if __name__ == "__main__":
