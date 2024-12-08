@@ -5,7 +5,7 @@ import urllib.parse
 import os
 import re
 
-ALL_FORMATS = ['fb2', 'epub', 'mobi', 'pdf']
+ALL_FORMATS = ['fb2', 'epub', 'mobi', 'pdf', 'djvu']
 SITE = 'http://flibusta.is'
 
 
@@ -28,14 +28,14 @@ def get_page(url):
     html_bytes = r.read()
     html = html_bytes.decode("utf-8")
     parser = "html.parser"
+    # soup = BeautifulSoup(html, "lxml")
     soup = BeautifulSoup(html, parser)
     return soup
 
 
-def scrape_books(title: str) -> list[Book] | None:
-    query_text = urllib.parse.quote(title)
-    url_mask = "http://flibusta.is/booksearch?ask={request_str}&chb=on"
-    url = url_mask.format(request_str=query_text)
+def scrape_books_by_title(text: str) -> list[Book] | None:
+    query_text = urllib.parse.quote(text)
+    url = f"http://flibusta.is/booksearch?ask={query_text}&chb=on"
 
     sp = get_page(url)
 
@@ -49,7 +49,6 @@ def scrape_books(title: str) -> list[Book] | None:
     li_list = target_ul.find_all("li")
 
     link_list = [a for a in (("http://flibusta.is" + li.a.get('href') + '/') for li in li_list)]
-    # author_list = [a for a in ((l.find_all('a')[1].text) for l in li_list)]
     author_list = []
     for li in li_list:
         a_list = li.find_all('a')
@@ -60,7 +59,7 @@ def scrape_books(title: str) -> list[Book] | None:
             author = '[автор не указан]'
         author_list.append(author)
 
-    title_list = [a for a in ((li.find_all('a')[0].text) for li in li_list)]
+    title_list = [a for a in (li.find_all('a')[0].text for li in li_list)]
     book_id_list = [str(li.a.get('href')).replace('/b/', '') for li in li_list]
 
     result = []
@@ -74,10 +73,70 @@ def scrape_books(title: str) -> list[Book] | None:
     return result
 
 
+def scrape_books_by_author(text: str) -> list[list[Book]] | None:
+    query_text = urllib.parse.quote(text)
+    url = f"http://flibusta.is/booksearch?ask={query_text}&cha=on"
+
+    sp_2 = get_page(url)
+
+    target_div = sp_2.find('div', attrs={'class': 'clear-block', 'id': 'main'})
+    target_ul_list = target_div.findChildren('ul', attrs={'class': ''})
+
+    if len(target_ul_list) == 0:
+        return None
+
+    target_ul = target_ul_list[0]
+    li_list = target_ul.find_all("li")
+
+    authors_link_list = [a for a in (("http://flibusta.is" + li.a.get('href') + '/') for li in li_list)]
+
+    final_res = []
+    for author_link in authors_link_list:
+        sp_2 = get_page(author_link)
+
+        author = sp_2.find("h1", attrs={"class": "title"}).text
+        target_form = sp_2.find('form', attrs={'method': 'POST'})
+        target_p_translates = target_form.find("h3", string='Переводы')
+        if target_p_translates:
+            sibling = target_p_translates.next_sibling
+            while sibling:
+                next_sibling = sibling.next_sibling
+                sibling.extract()
+                sibling = next_sibling
+
+        # target_checkbox_list_2 = target_form.findChildren('input', attrs={'type': 'checkbox'})
+        target_checkbox_list_2 = target_form.findChildren('svg')
+        target_a_list_2 = []
+
+        for cb in target_checkbox_list_2:
+            el = cb.find_next_sibling("a")
+            target_a_list_2.append(el)
+
+        if len(target_a_list_2) == 0:
+            return None
+
+        books_list_2 = [a for a in (("http://flibusta.is" + a.get('href') + '/') for a in target_a_list_2)]
+
+        title_list = [a.text for a in target_a_list_2]
+        book_id_list = [str(a.get('href')).replace('/b/', '') for a in target_a_list_2]
+
+        result = []
+        for i in range(len(book_id_list)):
+            book = Book(book_id_list[i])
+            book.title = title_list[i]
+            book.author = author
+            book.link = books_list_2[i]
+            result.append(book)
+
+        final_res.append(result)
+
+    return final_res
+
+
 def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
     title_q = urllib.parse.quote(title)
     author_q = urllib.parse.quote(author)
-    url = f"http://flibusta.is/makebooklist?ab=ab1&t={title_q}&ln={author_q}&sort=sd2&"
+    url = f"http://flibusta.is/makebooklist?ab=ab1&t={title_q}&ln={author_q}&sort=sd2"
 
     sp = get_page(url)
     target_form = sp.find('form', attrs={'name': 'bk'})
@@ -127,6 +186,8 @@ def get_book_by_id(book_id):
 
     target_h1 = target_div.find('h1', attrs={'class': 'title'})
     book.title = target_h1.text
+    if book.title == "Книги":
+        return None
     book.size = sp.find('span', attrs={'style': 'size'}).text
 
     target_img = target_div.find('img', attrs={'alt': 'Cover image'})
@@ -146,19 +207,19 @@ def get_book_by_id(book_id):
     return book
 
 
-def download_book_cover(book):
+def download_book_cover(book: Book):
     c_response = requests.get(book.cover)
     c_full_path = os.path.join(os.getcwd(), "books", book.id, 'cover.jpg')
     os.makedirs(os.path.dirname(c_full_path), exist_ok=True)
     open(os.path.join(c_full_path), "wb").write(c_response.content)
 
 
-def download_book(book: Book, b_format):
+def download_book(book: Book, b_format: str):
     book_url = book.formats[b_format]
 
     try:
         b_response = requests.get(book_url, timeout=10)
-    except requests.exceptions.Timeout as e:
+    except requests.exceptions.Timeout:
         return None
 
     if not b_response.ok:
