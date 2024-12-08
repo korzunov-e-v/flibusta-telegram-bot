@@ -11,3 +11,5 @@ RUN pip install poetry=="1.8.3" && \
     poetry install
 
 COPY src ./src
+
+CMD python src/srv.py
