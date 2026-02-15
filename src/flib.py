@@ -159,7 +159,9 @@ def scrape_books_mbl(title: str, author: str) -> list[Book] | None:
         book_id_list.append(book_id)
 
         a_list = d.find_all('a', attrs={'href': re.compile('/a/')})
-        if len(a_list) > 1:
+        if len(a_list) == 1:
+            author = ', '.join([a.text for a in a_list])
+        elif len(a_list) > 1:
             author_list_l = a_list[1:]
             author = ', '.join([a.text for a in author_list_l[::-1]])
         else:
