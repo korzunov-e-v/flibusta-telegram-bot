@@ -18,6 +18,7 @@ class Book:
         self.formats = {}
         self.cover = ''
         self.size = ''
+        self.annotation = ''
 
     def __str__(self):
         return f'{self.title} - {self.author} ({self.id})'
@@ -28,7 +29,6 @@ def get_page(url):
     html_bytes = r.read()
     html = html_bytes.decode("utf-8")
     parser = "html.parser"
-    # soup = BeautifulSoup(html, "lxml")
     soup = BeautifulSoup(html, parser)
     return soup
 
@@ -104,7 +104,6 @@ def scrape_books_by_author(text: str) -> list[list[Book]] | None:
                 sibling.extract()
                 sibling = next_sibling
 
-        # target_checkbox_list_2 = target_form.findChildren('input', attrs={'type': 'checkbox'})
         target_checkbox_list_2 = target_form.findChildren('svg')
         target_a_list_2 = []
 
@@ -205,6 +204,24 @@ def get_book_by_id(book_id):
         book.formats[b_format] = SITE + link
 
     book.author = target_h1.findNext('a').text
+
+    # === Парсинг аннотации ===
+    book.annotation = ""
+    annotation_header = target_div.find('h2', string=re.compile('Аннотация', re.IGNORECASE))
+    
+    if annotation_header:
+        annotation_paragraphs = []
+        sibling = annotation_header.find_next_sibling()
+        while sibling and sibling.name != 'h2':
+            if sibling.name == 'p' and sibling.text.strip():
+                annotation_paragraphs.append(sibling.text.strip())
+            sibling = sibling.find_next_sibling()
+        book.annotation = "\n\n".join(annotation_paragraphs)
+    else:
+        first_p = target_h1.find_next_sibling('p')
+        if first_p and first_p.text.strip():
+            book.annotation = first_p.text.strip()
+    # =========================
 
     return book
 
