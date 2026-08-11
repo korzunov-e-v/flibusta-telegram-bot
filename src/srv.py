@@ -1,5 +1,3 @@
-import os
-
 from dotenv import load_dotenv
 from telegram.ext import (
     ApplicationBuilder,
@@ -9,7 +7,7 @@ from telegram.ext import (
 )
 from telegram.ext.filters import TEXT
 
-from src.database import init_db
+from settings import settings
 from src.tg_bot import (
     button,
     email_command,
@@ -20,13 +18,9 @@ from src.tg_bot import (
 
 
 def main():
-    load_dotenv(".env")
-
-    init_db()
-
     app = (
         ApplicationBuilder()
-        .token(os.getenv("TOKEN"))
+        .token(settings.token.get_secret_value())
         .build()
     )
 

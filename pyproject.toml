@@ -15,6 +15,9 @@ python-dotenv = "^1.0.1"
 python-telegram-bot = "^21.9"
 bs4 = "^0.0.2"
 psycopg = { version = "^3.2", extras = ["binary"] }
+sqlalchemy = "^2.0.51"
+alembic = "^1.19.1"
+pydantic-settings = "^2.15.0"
 
 
 [build-system]

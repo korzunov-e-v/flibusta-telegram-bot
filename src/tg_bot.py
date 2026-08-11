@@ -1,7 +1,6 @@
 import os
 import re
 import smtplib
-import traceback
 from email.message import EmailMessage
 from urllib.error import HTTPError
 
@@ -10,31 +9,41 @@ from telegram.ext import CallbackContext
 
 from src import flib
 from src.custom_logging import get_logger
-from src.database import get_email, set_email
-
+from src.database.crud import get_email, set_email
+from src.settings import settings
 
 logger = get_logger(__name__)
 
 
 # --- SMTP ОТПРАВКА ---
 def send_email(file_content, filename, to_email):
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", 587))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASS")
-
     msg = EmailMessage()
-    msg['Subject'] = f'Книга: {filename}'
-    msg['From'] = smtp_user
-    msg['To'] = to_email
-    msg.set_content('Приятного чтения! Файл с книгой прикреплен к этому письму.')
+    msg["Subject"] = f"Книга: {filename}"
+    msg["From"] = settings.smtp_user
+    msg["To"] = to_email
 
-    msg.add_attachment(file_content, maintype='application', subtype='octet-stream', filename=filename)
+    msg.set_content(
+        "Приятного чтения! Файл с книгой прикреплен к этому письму."
+    )
 
-    with smtplib.SMTP(smtp_host, smtp_port) as server:
+    msg.add_attachment(
+        file_content,
+        maintype="application",
+        subtype="octet-stream",
+        filename=filename,
+    )
+
+    with smtplib.SMTP(
+        settings.smtp_host,
+        settings.smtp_port,
+    ) as server:
         server.starttls()
-        server.login(smtp_user, smtp_pass)
+        server.login(
+            settings.smtp_user,
+            settings.smtp_pass.get_secret_value(),
+        )
         server.send_message(msg)
+
 
 pending_email_requests = {}
 
