@@ -1,4 +1,3 @@
-from dotenv import load_dotenv
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -7,7 +6,7 @@ from telegram.ext import (
 )
 from telegram.ext.filters import TEXT
 
-from settings import settings
+from src.settings import settings
 from src.tg_bot import (
     button,
     email_command,
@@ -25,15 +24,24 @@ def main():
     )
 
     app.add_handler(
-        CommandHandler("start", start_callback)
+        CommandHandler(
+            "start",
+            start_callback,
+        )
     )
 
     app.add_handler(
-        CommandHandler("help", help_command)
+        CommandHandler(
+            "help",
+            help_command,
+        )
     )
 
     app.add_handler(
-        CommandHandler("email", email_command)
+        CommandHandler(
+            "email",
+            email_command,
+        )
     )
 
     app.add_handler(
@@ -41,7 +49,10 @@ def main():
     )
 
     app.add_handler(
-        MessageHandler(TEXT, handle_text)
+        MessageHandler(
+            TEXT,
+            handle_text,
+        )
     )
 
     app.run_polling()

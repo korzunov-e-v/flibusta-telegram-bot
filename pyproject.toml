@@ -11,7 +11,6 @@ package-mode = false
 [tool.poetry.dependencies]
 python = "^3.12"
 json-log-formatter = "^1.1"
-python-dotenv = "^1.0.1"
 python-telegram-bot = "^21.9"
 bs4 = "^0.0.2"
 psycopg = { version = "^3.2", extras = ["binary"] }

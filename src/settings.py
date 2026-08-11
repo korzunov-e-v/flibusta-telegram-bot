@@ -1,3 +1,5 @@
+from urllib.parse import quote_plus
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,13 +27,15 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        password = quote_plus(
+            self.postgres_password.get_secret_value()
+        )
+
         return (
             f"postgresql+psycopg://"
-            f"{self.postgres_user}:"
-            f"{self.postgres_password.get_secret_value()}@"
-            f"{self.postgres_host}:"
-            f"{self.postgres_port}/"
-            f"{self.postgres_db}"
+            f"{self.postgres_user}:{password}"
+            f"@{self.postgres_host}:{self.postgres_port}"
+            f"/{self.postgres_db}"
         )
 
 
