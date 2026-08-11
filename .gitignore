@@ -265,3 +265,9 @@ cython_debug/
 # Support for Project snippet scope
 
 # End of https://www.toptal.com/developers/gitignore/api/visualstudiocode,python,django
+.env
+data/
+search_log.log
+books/
+repomix-output.md
+repomix-output.xml

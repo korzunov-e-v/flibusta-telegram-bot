@@ -1,20 +1,85 @@
-import os
-
-from dotenv import load_dotenv
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+)
 from telegram.ext.filters import TEXT
 
-from src.tg_bot import start_callback, button, help_command, find_the_book
+from src.settings import settings
+from src.tg_bot import (
+    button,
+    email_command,
+    handle_text,
+    help_command,
+    start_callback,
+)
+from src.custom_logging import get_logger
+
+logger = get_logger(__name__)
+
+
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    error = context.error
+
+    logger.error(
+        "Unhandled telegram error",
+        extra={
+            "exception_type": type(error).__name__,
+            "exception": repr(error),
+        },
+        exc_info=(
+            type(error),
+            error,
+            error.__traceback__,
+        ),
+    )
 
 
 def main():
-    load_dotenv(".env")
+    app = (
+        ApplicationBuilder()
+        .token(settings.token.get_secret_value())
+        .build()
+    )
 
-    app = ApplicationBuilder().token(os.getenv("TOKEN")).build()
-    app.add_handler(CommandHandler("start", start_callback))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(TEXT, find_the_book))
+    app.add_error_handler(error_handler)
+
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start_callback,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "help",
+            help_command,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "email",
+            email_command,
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(button)
+    )
+
+    app.add_handler(
+        MessageHandler(
+            TEXT,
+            handle_text,
+        )
+    )
 
     app.run_polling()
 
