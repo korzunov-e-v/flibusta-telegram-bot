@@ -1,44 +1,52 @@
-# 📚 Flibusta Telegram Bot (+Email)
+# 📚 Flibusta Telegram Bot
 
-Лёгкий, быстрый и удобный Telegram-бот для поиска и скачивания книг с Флибусты.
+Telegram-бот для поиска и скачивания книг с Flibusta.
 
-Этот форк значительно расширяет возможности оригинального проекта. Мы добавили встроенное хранение данных на SQLite и функцию **прямой отправки книг на электронные читалки (Kindle, PocketBook и др.) по E-mail**.
+### Возможности
 
-## ✨ Главные фишки
+* 🔍 Поиск книг по названию и автору
+* 📖 Просмотр информации и аннотации
+* ⬇️ Скачивание в `fb2`, `epub`, `mobi`, `pdf`, `djvu`
+* 📩 Отправка книг на E-mail
+* 💾 Хранение E-mail пользователей в PostgreSQL
+* 🐳 Запуск через Docker Compose
 
-- 🔍 **Умный поиск:** Ищет книги по названию и/или автору.
-- ⬇️ **Скачивание в чат:** Поддержка `fb2`, `epub`, `mobi` и других форматов сайта.
-- 📩 **Отправка на читалку:** Отправляет файлы напрямую на E-mail вашего устройства.
-- 💾 **Индивидуальная память:** Бот автоматически запоминает почту для каждого пользователя.
-- 📝 **Красивый интерфейс:** Удобные кнопки и просмотр развернутой аннотации в отдельном сообщении.
-- 🐳 **Ультра-легкий запуск:** Всё работает в одном Docker-контейнере, база данных (`users.db`) создается сама "на лету".
+### Запуск
 
-## 🚀 Быстрый старт
-
-**1. Клонируйте репозиторий:**
 ```bash
-git clone https://github.com/maksmqks/Flibusta-Telegram-Bot-Email-.git
-cd Flibusta-Telegram-Bot-Email-
+git clone https://github.com/korzunov-e-v/flibusta-telegram-bot.git
+cd flibusta-telegram-bot
 ```
-**2. Настройте переменные окружения:**
-Создайте файл .env в корне проекта и заполните его:
-```
-# Токен вашего бота от @BotFather
-TOKEN=ваш_токен_бота
 
-# Ваш ID в Telegram (можно узнать у @userinfobot)
-ADMINS=ваш_telegram_id
+Создайте `.env`:
 
-# Настройки SMTP для отправки книг на почту читалки
+```env
+TOKEN=your_telegram_bot_token
+ADMINS=your_telegram_id
+
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USER=ваша_почта_отправитель@gmail.com
-SMTP_PASS=ваш_пароль_приложения
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_app_password
+
+POSTGRES_DB=flibusta
+POSTGRES_USER=flibusta
+POSTGRES_PASSWORD=change_me
+DATABASE_URL=postgresql://flibusta:change_me@postgres:5432/flibusta
 ```
-💡 Важно: Если используете Gmail, в поле SMTP_PASS нужно вставлять "Пароль приложения", а не основной пароль от почты.
 
-**3. Запустите бота через Docker:**
+Запустите:
 
-```docker compose up -d --build```
+```bash
+docker compose up -d --build
+```
 
-Бот готов к работе! Никаких дополнительных миграций баз данных выполнять не нужно.
+PostgreSQL хранит данные в Docker volume, поэтому данные пользователей не пропадают при пересоздании контейнеров.
+
+### Команды бота
+
+```text
+/start   — начать работу
+/help    — справка
+/email   — посмотреть или изменить E-mail
+```

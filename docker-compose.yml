@@ -1,16 +1,46 @@
 version: '3'
 
 services:
-  tg-bot:
-    container_name: flibusta-tg-bot
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: python src/srv.py
-    restart: always
-    env_file:
-      - .env
-    volumes:
-      - ./books:/srv/books
-      - ./search_log.log:/srv/search_log.log
-      - ./src:/srv/src
+    postgres:
+        image: postgres:16-alpine
+        container_name: flibusta-postgres
+        restart: always
+        environment:
+            POSTGRES_DB: ${POSTGRES_DB}
+            POSTGRES_USER: ${POSTGRES_USER}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
+        healthcheck:
+            test:
+              [
+                  "CMD-SHELL",
+                  "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+              ]
+            interval: 5s
+            timeout: 5s
+            retries: 5
+
+    tg-bot:
+        container_name: flibusta-tg-bot
+        build:
+            context: .
+            dockerfile: Dockerfile
+        command: python src/srv.py
+        restart: always
+
+        env_file:
+            - .env
+
+        depends_on:
+            postgres:
+                condition: service_healthy
+
+        volumes:
+            - ./books:/srv/books
+            - ./search_log.log:/srv/search_log.log
+            - ./src:/srv/src
+
+
+volumes:
+    postgres_data:

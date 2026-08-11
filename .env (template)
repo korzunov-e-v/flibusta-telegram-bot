@@ -1,1 +1,13 @@
-TOKEN='0123456789:abracadabra'
+TOKEN=твой_telegram_token
+ADMINS=твой_telegram_id
+
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=твоя_почта@gmail.com
+SMTP_PASS=пароль_приложения
+
+POSTGRES_DB=flibusta
+POSTGRES_USER=flibusta
+POSTGRES_PASSWORD=change_me_to_a_strong_password
+
+DATABASE_URL=postgresql://flibusta:change_me_to_a_strong_password@postgres:5432/flibusta

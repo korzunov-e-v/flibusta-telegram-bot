@@ -1,8 +1,7 @@
 import os
-import traceback
-import sqlite3
 import re
 import smtplib
+import traceback
 from email.message import EmailMessage
 from urllib.error import HTTPError
 
@@ -11,23 +10,11 @@ from telegram.ext import CallbackContext
 
 from src import flib
 from src.custom_logging import get_logger
+from src.database import get_email, set_email
+
 
 logger = get_logger(__name__)
 
-# --- ВСТРОЕННАЯ БАЗА ДЛЯ EMAIL ---
-def init_db():
-    with sqlite3.connect("users.db") as conn:
-        conn.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, email TEXT)")
-init_db()
-
-def get_email(user_id):
-    with sqlite3.connect("users.db") as conn:
-        res = conn.execute("SELECT email FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        return res[0] if res else None
-
-def set_email(user_id, email):
-    with sqlite3.connect("users.db") as conn:
-        conn.execute("INSERT OR REPLACE INTO users (user_id, email) VALUES (?, ?)", (user_id, email))
 
 # --- SMTP ОТПРАВКА ---
 def send_email(file_content, filename, to_email):
@@ -210,7 +197,7 @@ async def find_book_by_id(book_id, update: Update, context: CallbackContext):
     safe_author = book.author.replace('<', '<').replace('>', '>')
     
     # Красивая карточка БЕЗ аннотации (она теперь по кнопке)
-    capt = "📖 {title}\n🗣 {author}\n⚖️ {size}\n🌐 Страница книги".format(
+    capt = "📖 {title}\n🗣 {author}\n⚖️ {size}\n🌐 Страница книги {url}".format(
         author=safe_author, title=safe_title, url=book.link, size=book.size
     )
 
