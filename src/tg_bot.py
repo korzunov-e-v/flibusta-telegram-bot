@@ -89,7 +89,7 @@ async def help_command(update: Update, _: CallbackContext) -> None:
 async def email_command(update: Update, context: CallbackContext) -> None:
     args = context.args
     if not args:
-        current = get_email(update.effective_user.id)
+        current = await get_email(update.effective_user.id)
         if current:
             await update.message.reply_text(f"Ваш текущий email: {current}\nЧтобы изменить его, напишите: /email ваш@адрес.com")
         else:
@@ -98,7 +98,7 @@ async def email_command(update: Update, context: CallbackContext) -> None:
         
     new_email = args[0]
     if re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", new_email):
-        set_email(update.effective_user.id, new_email)
+        await set_email(update.effective_user.id, new_email)
         await update.message.reply_text(f"✅ Email успешно изменён на {new_email}")
     else:
         await update.message.reply_text("❌ Неверный формат email.")
@@ -110,7 +110,7 @@ async def handle_text(update: Update, context: CallbackContext) -> None:
 
     if user_id in pending_email_requests:
         if re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", text):
-            set_email(user_id, text)
+            await set_email(user_id, text)
             req = pending_email_requests.pop(user_id)
             await update.message.reply_text("✅ Email успешно сохранён!\nЕсли захотите заменить его в будущем, воспользуйтесь командой /email.")
             mes = await context.bot.send_message(chat_id=update.effective_chat.id, text="Продолжаю отправку книги...")
@@ -247,7 +247,7 @@ async def process_book_request(arg: str, update: Update, context: CallbackContex
     user_id = update.effective_user.id
     
     if mode == "email":
-        email = get_email(user_id)
+        email = await get_email(user_id)
         if not email:
             pending_email_requests[user_id] = {"book_id": book_id, "format": book_format}
             await context.bot.send_message(
@@ -272,7 +272,7 @@ async def download_and_send(mode, book_id, book_format, update: Update, context:
         await context.bot.send_document(chat_id=update.effective_chat.id, document=b_content, filename=b_filename)
         await context.bot.deleteMessage(chat_id=mes.chat_id, message_id=mes.message_id)
     elif mode == "email":
-        email = get_email(update.effective_user.id)
+        email = await get_email(update.effective_user.id)
         await context.bot.edit_message_text(chat_id=mes.chat_id, message_id=mes.message_id, text=f"Отправляю книгу на {email}...")
         try:
             send_email(b_content, b_filename, email)

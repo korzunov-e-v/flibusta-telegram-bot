@@ -2,16 +2,16 @@ from src.database.models import User
 from src.database.session import SessionLocal
 
 
-def get_email(user_id: int) -> str | None:
-    with SessionLocal() as session:
-        user = session.get(User, user_id)
+async def get_email(user_id: int) -> str | None:
+    async with SessionLocal() as session:
+        user = await session.get(User, user_id)
 
         return user.email if user else None
 
 
-def set_email(user_id: int, email: str) -> None:
-    with SessionLocal() as session:
-        user = session.get(User, user_id)
+async def set_email(user_id: int, email: str) -> None:
+    async with SessionLocal() as session:
+        user = await session.get(User, user_id)
 
         if user is None:
             user = User(
@@ -22,4 +22,4 @@ def set_email(user_id: int, email: str) -> None:
         else:
             user.email = email
 
-        session.commit()
+        await session.commit()
