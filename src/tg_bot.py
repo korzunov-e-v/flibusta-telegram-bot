@@ -1,9 +1,7 @@
 import asyncio
 import os
-import re
 import smtplib
 from email.message import EmailMessage
-from urllib.error import HTTPError
 
 import httpx
 from telegram import (
@@ -12,15 +10,16 @@ from telegram import (
     Update,
 )
 from telegram.ext import CallbackContext
+from pydantic import ValidationError
 
 from src import flib
 from src.custom_logging import get_logger
 from src.database.crud import get_email, set_email
 from src.settings import settings
+from src.schemas import EmailData
 
 
 logger = get_logger(__name__)
-
 
 def send_email(
     file_content,
@@ -56,9 +55,6 @@ def send_email(
         )
 
         server.send_message(msg)
-
-
-pending_email_requests = {}
 
 
 def build_book_keyboard(
@@ -169,22 +165,22 @@ async def email_command(
 
     new_email = args[0]
 
-    if re.match(
-        r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
-        new_email,
-    ):
-        await set_email(
-            update.effective_user.id,
-            new_email,
-        )
-
-        await update.message.reply_text(
-            f"✅ Email успешно изменён на {new_email}"
-        )
-    else:
+    try:
+        email_data = EmailData(email=new_email)
+    except ValidationError:
         await update.message.reply_text(
             "❌ Неверный формат email."
         )
+        return
+
+    await set_email(
+        update.effective_user.id,
+        str(email_data.email),
+    )
+
+    await update.message.reply_text(
+        f"✅ Email успешно изменён на {email_data.email}"
+    )
 
 
 async def handle_text(
@@ -194,49 +190,56 @@ async def handle_text(
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    if user_id in pending_email_requests:
-        if re.match(
-            r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
-            text,
-        ):
-            await set_email(
-                user_id,
-                text,
-            )
+    pending_request = context.user_data.get(
+        "pending_email_request"
+    )
 
-            req = pending_email_requests.pop(
-                user_id
-            )
-
+    if pending_request:
+        try:
+            email_data = EmailData(email=text)
+        except ValidationError:
             await update.message.reply_text(
-                "✅ Email успешно сохранён!\n"
-                "Если захотите заменить его в будущем, "
-                "воспользуйтесь командой /email."
+                "❌ Неверный формат email.\n"
+                "Попробуйте ещё раз:"
             )
-
-            mes = await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="Продолжаю отправку книги...",
-            )
-
-            await download_and_send(
-                "email",
-                req["book_id"],
-                req["format"],
-                update,
-                context,
-                mes,
-            )
-
             return
-        else:
-            del pending_email_requests[user_id]
+
+        await set_email(
+            user_id,
+            str(email_data.email),
+        )
+
+        context.user_data.pop(
+            "pending_email_request",
+            None,
+        )
+
+        await update.message.reply_text(
+            "✅ Email успешно сохранён!\n"
+            "Если захотите заменить его в будущем, "
+            "воспользуйтесь командой /email."
+        )
+
+        mes = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Продолжаю отправку книги...",
+        )
+
+        await download_and_send(
+            "email",
+            pending_request["book_id"],
+            pending_request["format"],
+            update,
+            context,
+            mes,
+        )
+
+        return
 
     await find_the_book(
         update,
         context,
     )
-
 
 async def find_the_book(
     update: Update,
@@ -623,7 +626,7 @@ async def process_book_request(
         email = await get_email(user_id)
 
         if not email:
-            pending_email_requests[user_id] = {
+            context.user_data["pending_email_request"] = {
                 "book_id": book_id,
                 "format": book_format,
             }
