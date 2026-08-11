@@ -1,6 +1,7 @@
 import os
 import re
 import urllib.parse
+from email.message import Message
 
 import httpx
 from bs4 import BeautifulSoup
@@ -9,7 +10,7 @@ from bs4 import BeautifulSoup
 ALL_FORMATS = ["fb2", "epub", "mobi", "pdf", "djvu"]
 SITE = "http://flibusta.is"
 
-HTTP_TIMEOUT = 10.0
+HTTP_TIMEOUT = 20.0
 
 
 class Book:
@@ -28,17 +29,25 @@ class Book:
 
 
 async def get_page(url: str) -> BeautifulSoup:
-    async with httpx.AsyncClient(
-        timeout=HTTP_TIMEOUT,
-        follow_redirects=True,
-    ) as client:
-        response = await client.get(url)
-        response.raise_for_status()
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(
+                timeout=HTTP_TIMEOUT,
+                follow_redirects=True,
+            ) as client:
+                response = await client.get(url)
+                response.raise_for_status()
 
-    html = response.text
+            return BeautifulSoup(
+                response.text,
+                "html.parser",
+            )
 
-    return BeautifulSoup(html, "html.parser")
+        except httpx.ReadTimeout:
+            if attempt == 1:
+                raise
 
+    raise RuntimeError("Failed to fetch page")
 
 async def scrape_books_by_title(text: str) -> list[Book] | None:
     query_text = urllib.parse.quote(text)
@@ -402,12 +411,15 @@ async def download_book_cover(book: Book):
     if not book.cover:
         return
 
-    async with httpx.AsyncClient(
-        timeout=HTTP_TIMEOUT,
-        follow_redirects=True,
-    ) as client:
-        response = await client.get(book.cover)
-        response.raise_for_status()
+    try:
+        async with httpx.AsyncClient(
+            timeout=HTTP_TIMEOUT,
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(book.cover)
+            response.raise_for_status()
+    except httpx.HTTPError:
+        return
 
     c_full_path = os.path.join(
         os.getcwd(),
@@ -437,7 +449,7 @@ async def download_book(
             follow_redirects=True,
         ) as client:
             response = await client.get(book_url)
-    except httpx.TimeoutException:
+    except httpx.HTTPError:
         return None
 
     if not response.is_success:
@@ -450,14 +462,13 @@ async def download_book(
     if not content_disposition:
         return None
 
-    try:
-        n_index = content_disposition.index("=")
-    except ValueError:
-        return None
+    message = Message()
+    message["content-disposition"] = content_disposition
 
-    filename = content_disposition[
-        n_index + 1:
-    ].replace('"', "")
+    filename = message.get_filename()
+
+    if not filename:
+        return None
 
     if filename.endswith(".fb2.zip"):
         filename = filename.removesuffix(".zip")

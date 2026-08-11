@@ -1,9 +1,11 @@
+import asyncio
 import os
 import re
 import smtplib
 from email.message import EmailMessage
 from urllib.error import HTTPError
 
+import httpx
 from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -312,7 +314,7 @@ async def find_the_book(
             if book_by_id:
                 libr.append(book_by_id)
 
-    except (AttributeError, HTTPError) as e:
+    except httpx.HTTPError as e:
         await context.bot.delete_message(
             chat_id=mes.chat_id,
             message_id=mes.message_id,
@@ -323,8 +325,12 @@ async def find_the_book(
         )
 
         logger.error(
-            f"Access error {e}",
-            extra={"exc": e},
+            "Flibusta request failed",
+            extra={
+                "exception_type": type(e).__name__,
+                "exception": repr(e),
+                "url": str(e.request.url) if e.request else None,
+            },
         )
 
         return
@@ -721,7 +727,8 @@ async def download_and_send(
         )
 
         try:
-            send_email(
+            await asyncio.to_thread(
+                send_email,
                 b_content,
                 b_filename,
                 email,

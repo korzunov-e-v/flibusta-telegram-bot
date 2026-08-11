@@ -42,8 +42,11 @@ logging.basicConfig(
 
 
 def get_logger(name: str):
+
     logger = logging.getLogger(name)
     logger.propagate = False
+    if logger.handlers:
+        return logger
     file_handler = logging.FileHandler(filename="search_log.log", encoding="utf-8")
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
