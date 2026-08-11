@@ -17,6 +17,7 @@ psycopg = { version = "^3.2", extras = ["binary"] }
 sqlalchemy = "^2.0.51"
 alembic = "^1.19.1"
 pydantic-settings = "^2.15.0"
+httpx = "^0.28.1"
 
 
 [build-system]
