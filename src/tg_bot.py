@@ -1,5 +1,4 @@
 import asyncio
-import os
 import smtplib
 from email.message import EmailMessage
 
@@ -9,6 +8,7 @@ from telegram import (
     InlineKeyboardMarkup,
     Update,
 )
+from telegram.error import TelegramError
 from telegram.ext import CallbackContext
 from pydantic import ValidationError
 
@@ -20,6 +20,50 @@ from src.schemas import EmailData
 
 
 logger = get_logger(__name__)
+
+
+async def delete_status_message(
+    context: CallbackContext,
+    mes,
+) -> None:
+    try:
+        await context.bot.delete_message(
+            chat_id=mes.chat_id,
+            message_id=mes.message_id,
+        )
+    except TelegramError:
+        pass
+
+
+async def report_flib_error(
+    error: httpx.HTTPError,
+    update: Update,
+    context: CallbackContext,
+    mes=None,
+) -> None:
+    # HTTPError.request бросает RuntimeError, если запрос не был выставлен
+    request = getattr(error, "_request", None)
+
+    logger.error(
+        "Flibusta request failed",
+        extra={
+            "exception_type": type(error).__name__,
+            "exception": repr(error),
+            "url": str(request.url) if request else None,
+        },
+    )
+
+    if mes is not None:
+        await delete_status_message(context, mes)
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            "Произошла ошибка на сервере. "
+            "Попробуйте ещё раз позже."
+        ),
+    )
+
 
 def send_email(
     file_content,
@@ -318,24 +362,7 @@ async def find_the_book(
                 libr.append(book_by_id)
 
     except httpx.HTTPError as e:
-        await context.bot.delete_message(
-            chat_id=mes.chat_id,
-            message_id=mes.message_id,
-        )
-
-        await update.message.reply_text(
-            "Произошла ошибка на сервере."
-        )
-
-        logger.error(
-            "Flibusta request failed",
-            extra={
-                "exception_type": type(e).__name__,
-                "exception": repr(e),
-                "url": str(e.request.url) if e.request else None,
-            },
-        )
-
+        await report_flib_error(e, update, context, mes)
         return
 
     if not libr:
@@ -409,42 +436,46 @@ async def button(
         maxsplit=1,
     )
 
-    if command == "find_book_by_id":
-        await find_book_by_id(
-            book_id=arg,
-            update=update,
-            context=context,
-        )
-
-    elif command == "switch_mode":
-        new_mode, book_id = arg.split(" ")
-
-        book = await flib.get_book_by_id(
-            book_id
-        )
-
-        if book:
-            await query.edit_message_reply_markup(
-                reply_markup=build_book_keyboard(
-                    book.id,
-                    book.formats,
-                    mode=new_mode,
-                )
+    try:
+        if command == "find_book_by_id":
+            await find_book_by_id(
+                book_id=arg,
+                update=update,
+                context=context,
             )
 
-    elif command == "get_book":
-        await process_book_request(
-            arg,
-            update,
-            context,
-        )
+        elif command == "switch_mode":
+            new_mode, book_id = arg.split(" ")
 
-    elif command == "show_annotation":
-        await show_annotation(
-            arg,
-            update,
-            context,
-        )
+            book = await flib.get_book_by_id(
+                book_id
+            )
+
+            if book:
+                await query.edit_message_reply_markup(
+                    reply_markup=build_book_keyboard(
+                        book.id,
+                        book.formats,
+                        mode=new_mode,
+                    )
+                )
+
+        elif command == "get_book":
+            await process_book_request(
+                arg,
+                update,
+                context,
+            )
+
+        elif command == "show_annotation":
+            await show_annotation(
+                arg,
+                update,
+                context,
+            )
+
+    except httpx.HTTPError as e:
+        await report_flib_error(e, update, context)
 
 
 async def find_book_by_id(
@@ -465,18 +496,20 @@ async def find_book_by_id(
         text="Подождите, идёт загрузка...",
     )
 
-    book = await flib.get_book_by_id(
-        book_id
-    )
+    try:
+        book = await flib.get_book_by_id(
+            book_id
+        )
+    except httpx.HTTPError as e:
+        await report_flib_error(e, update, context, mes)
+        return
 
     if not book:
-        await context.bot.delete_message(
-            chat_id=mes.chat_id,
-            message_id=mes.message_id,
-        )
+        await delete_status_message(context, mes)
 
-        await update.message.reply_text(
-            "Книга не найдена."
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Книга не найдена.",
         )
 
         return
@@ -511,18 +544,11 @@ async def find_book_by_id(
         mode="chat",
     )
 
-    if book.cover:
-        await flib.download_book_cover(book)
+    cover_path = await flib.download_book_cover(book)
 
-        c_full_path = os.path.join(
-            os.getcwd(),
-            "books",
-            book_id,
-            "cover.jpg",
-        )
-
+    if cover_path:
         with open(
-            c_full_path,
+            cover_path,
             "rb",
         ) as cover:
             await context.bot.send_photo(
@@ -540,10 +566,7 @@ async def find_book_by_id(
             parse_mode="HTML",
         )
 
-    await context.bot.delete_message(
-        chat_id=mes.chat_id,
-        message_id=mes.message_id,
-    )
+    await delete_status_message(context, mes)
 
 
 async def show_annotation(
@@ -556,9 +579,13 @@ async def show_annotation(
         text="Загружаю аннотацию...",
     )
 
-    book = await flib.get_book_by_id(
-        book_id
-    )
+    try:
+        book = await flib.get_book_by_id(
+            book_id
+        )
+    except httpx.HTTPError as e:
+        await report_flib_error(e, update, context, mes)
+        return
 
     if not book:
         await context.bot.edit_message_text(
@@ -666,15 +693,16 @@ async def download_and_send(
     context: CallbackContext,
     mes,
 ):
-    book = await flib.get_book_by_id(
-        book_id
-    )
+    try:
+        book = await flib.get_book_by_id(
+            book_id
+        )
+    except httpx.HTTPError as e:
+        await report_flib_error(e, update, context, mes)
+        return
 
     if not book:
-        await context.bot.delete_message(
-            chat_id=mes.chat_id,
-            message_id=mes.message_id,
-        )
+        await delete_status_message(context, mes)
 
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -689,10 +717,7 @@ async def download_and_send(
     )
 
     if not result:
-        await context.bot.delete_message(
-            chat_id=mes.chat_id,
-            message_id=mes.message_id,
-        )
+        await delete_status_message(context, mes)
 
         await context.bot.send_message(
             chat_id=update.effective_chat.id,

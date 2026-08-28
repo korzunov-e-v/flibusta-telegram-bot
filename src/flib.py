@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import urllib.parse
@@ -11,6 +12,38 @@ ALL_FORMATS = ["fb2", "epub", "mobi", "pdf", "djvu"]
 SITE = "http://flibusta.is"
 
 HTTP_TIMEOUT = 20.0
+HTTP_RETRIES = 3
+HTTP_RETRY_DELAY = 1.0
+HTTP_MAX_CONNECTIONS = 20
+HTTP_MAX_KEEPALIVE = 10
+
+_client: httpx.AsyncClient | None = None
+
+
+def get_client() -> httpx.AsyncClient:
+    """Общий клиент: переиспользует TCP-соединения между запросами."""
+    global _client
+
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=HTTP_TIMEOUT,
+            follow_redirects=True,
+            limits=httpx.Limits(
+                max_connections=HTTP_MAX_CONNECTIONS,
+                max_keepalive_connections=HTTP_MAX_KEEPALIVE,
+            ),
+        )
+
+    return _client
+
+
+async def close_client() -> None:
+    global _client
+
+    if _client is not None and not _client.is_closed:
+        await _client.aclose()
+
+    _client = None
 
 
 class Book:
@@ -29,25 +62,27 @@ class Book:
 
 
 async def get_page(url: str) -> BeautifulSoup:
-    for attempt in range(2):
+    for attempt in range(HTTP_RETRIES):
         try:
-            async with httpx.AsyncClient(
-                timeout=HTTP_TIMEOUT,
-                follow_redirects=True,
-            ) as client:
-                response = await client.get(url)
-                response.raise_for_status()
+            response = await get_client().get(url)
+            response.raise_for_status()
 
             return BeautifulSoup(
                 response.text,
                 "html.parser",
             )
 
-        except httpx.ReadTimeout:
-            if attempt == 1:
+        # Таймауты, обрывы соединения и протухшие keep-alive соединения
+        except httpx.TransportError:
+            if attempt == HTTP_RETRIES - 1:
                 raise
 
+            await asyncio.sleep(
+                HTTP_RETRY_DELAY * (attempt + 1)
+            )
+
     raise RuntimeError("Failed to fetch page")
+
 
 async def scrape_books_by_title(text: str) -> list[Book] | None:
     query_text = urllib.parse.quote(text)
@@ -407,19 +442,15 @@ async def get_book_by_id(book_id: str) -> Book | None:
     return book
 
 
-async def download_book_cover(book: Book):
+async def download_book_cover(book: Book) -> str | None:
     if not book.cover:
-        return
+        return None
 
     try:
-        async with httpx.AsyncClient(
-            timeout=HTTP_TIMEOUT,
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(book.cover)
-            response.raise_for_status()
+        response = await get_client().get(book.cover)
+        response.raise_for_status()
     except httpx.HTTPError:
-        return
+        return None
 
     c_full_path = os.path.join(
         os.getcwd(),
@@ -436,6 +467,8 @@ async def download_book_cover(book: Book):
     with open(c_full_path, "wb") as file:
         file.write(response.content)
 
+    return c_full_path
+
 
 async def download_book(
     book: Book,
@@ -444,11 +477,7 @@ async def download_book(
     book_url = book.formats[b_format]
 
     try:
-        async with httpx.AsyncClient(
-            timeout=HTTP_TIMEOUT,
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(book_url)
+        response = await get_client().get(book_url)
     except httpx.HTTPError:
         return None
 

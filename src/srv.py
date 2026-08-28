@@ -1,4 +1,5 @@
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
@@ -7,6 +8,7 @@ from telegram.ext import (
 )
 from telegram.ext.filters import TEXT
 
+from src import flib
 from src.settings import settings
 from src.tg_bot import (
     button,
@@ -40,10 +42,15 @@ async def error_handler(
     )
 
 
+async def post_shutdown(_: Application) -> None:
+    await flib.close_client()
+
+
 def main():
     app = (
         ApplicationBuilder()
         .token(settings.token.get_secret_value())
+        .post_shutdown(post_shutdown)
         .build()
     )
 
