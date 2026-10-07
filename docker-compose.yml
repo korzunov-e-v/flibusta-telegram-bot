@@ -1,14 +1,17 @@
-version: '3'
+x-logging: &default-logging
+    driver: json-file
+    options:
+        max-size: "10m"
+        max-file: "5"
 
 services:
     postgres:
         image: postgres:16-alpine
         container_name: flibusta-postgres
-        restart: always
-        ports:
-            - "5432:5432"
+        restart: unless-stopped
+        # порт наружу не публикуется: бот ходит в БД по внутренней сети compose.
+        # Для разработки порт открывает docker-compose.dev.yml (только на 127.0.0.1).
         environment:
-            POSTGRES_HOST: postgres
             POSTGRES_DB: ${POSTGRES_DB}
             POSTGRES_USER: ${POSTGRES_USER}
             POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -23,6 +26,7 @@ services:
             interval: 5s
             timeout: 5s
             retries: 5
+        logging: *default-logging
 
     tg-bot:
         container_name: flibusta-tg-bot
@@ -31,18 +35,23 @@ services:
             dockerfile: Dockerfile
         command: >
             sh -c "alembic upgrade head &&
-                   python src/srv.py"
-        restart: always
+                   exec python src/srv.py"
+        restart: unless-stopped
         env_file:
             - .env
+        environment:
+            # внутри сети compose адрес БД фиксирован и не зависит от .env
+            POSTGRES_HOST: postgres
+            POSTGRES_PORT: "5432"
+            DATA_DIR: /srv/data
         depends_on:
             postgres:
                 condition: service_healthy
         volumes:
-            - ./books:/srv/books
-            - ./search_log.log:/srv/search_log.log
-            - ./src:/srv/src
+            - bot_data:/srv/data
+        logging: *default-logging
 
 
 volumes:
     postgres_data:
+    bot_data:

@@ -1,29 +1,41 @@
+import json
 import logging
 import sys
-from datetime import datetime, UTC
+from datetime import UTC, datetime
+from typing import Any
 
-from json_log_formatter import JSONFormatter, _json_serializable
+from json_log_formatter import JSONFormatter
 
-logging.getLogger("httpx").setLevel(logging.ERROR)
+# httpx на уровне INFO пишет URL запросов, а в URL Bot API входит токен бота
+NOISY_LOGGERS = ("httpx", "httpcore")
+
+
+def _default(obj: object) -> str:
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+
+    return str(obj)
 
 
 class CustomJSONFormatter(JSONFormatter):
-    def to_json(self, record):
+    def to_json(self, record: dict[str, Any]) -> str:
         try:
-            return self.json_lib.dumps(record, ensure_ascii=False, default=_json_serializable)
+            return json.dumps(record, ensure_ascii=False, default=_default)
         except (TypeError, ValueError, OverflowError):
-            try:
-                return self.json_lib.dumps(record)
-            except (TypeError, ValueError, OverflowError):
-                return "{}"
+            return json.dumps({key: str(value) for key, value in record.items()})
 
-    def json_record(self, message, extra, record):
-        result = {}
-        if "time" not in extra:
-            result["time"] = datetime.now(UTC)
-
-        result["levelname"] = record.levelname
-        result["message"] = message
+    def json_record(
+        self,
+        message: str,
+        extra: dict[str, Any],
+        record: logging.LogRecord,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "time": datetime.now(UTC),
+            "levelname": record.levelname,
+            "name": record.name,
+            "message": message,
+        }
         result.update(extra)
 
         if record.exc_info:
@@ -32,27 +44,18 @@ class CustomJSONFormatter(JSONFormatter):
         return result
 
 
-formatter = CustomJSONFormatter()
+def setup_logging(level: int = logging.INFO) -> None:
+    """Один JSON-handler на stdout для всех логгеров: своих, PTB, SQLAlchemy, httpx."""
+    handler = logging.StreamHandler(stream=sys.stdout)
+    handler.setFormatter(CustomJSONFormatter())
 
-logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        encoding="utf-8",
-        level=logging.INFO,
-)
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(level)
+
+    for name in NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def get_logger(name: str):
-
-    logger = logging.getLogger(name)
-    logger.propagate = False
-    if logger.handlers:
-        return logger
-    file_handler = logging.FileHandler(filename="search_log.log", encoding="utf-8")
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    stream_handler = logging.StreamHandler(stream=sys.stdout)
-    stream_handler.setLevel(logging.INFO)
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
-    return logger
+def get_logger(name: str) -> logging.Logger:
+    return logging.getLogger(name)

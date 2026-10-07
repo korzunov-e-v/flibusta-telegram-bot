@@ -11,14 +11,53 @@ package-mode = false
 [tool.poetry.dependencies]
 python = "^3.12"
 json-log-formatter = "^1.1"
-python-telegram-bot = "^21.9"
-bs4 = "^0.0.2"
+python-telegram-bot = { version = "^22.0", extras = ["rate-limiter"] }
+beautifulsoup4 = "^4.12"
 psycopg = { version = "^3.2", extras = ["binary"] }
-sqlalchemy = "^2.0.51"
+sqlalchemy = { version = "^2.0.51", extras = ["asyncio"] }
 alembic = "^1.19.1"
 pydantic-settings = "^2.15.0"
 httpx = "^0.28.1"
 email-validator = "^2.3.0"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0"
+pytest-asyncio = "^1.0"
+ruff = "^0.16"
+mypy = "^2.0"
+
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["."]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# автогенерируемые миграции: длинные строки и старый стиль аннотаций допустимы
+"src/alembic/versions/*" = ["E501", "UP", "I"]
+
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["json_log_formatter", "json_log_formatter.*"]
+ignore_missing_imports = true
 
 
 [build-system]

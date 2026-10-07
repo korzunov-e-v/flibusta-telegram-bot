@@ -1,20 +1,64 @@
-name: Deploy
+name: CI / Deploy
 
 on:
   push:
     branches: [ "master" ]
   pull_request:
-    branches: [ "master" ]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  deploy:
+  checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # заглушки: настройки читаются из окружения при импорте, реальные сервисы тестам не нужны
+      TOKEN: "0:test-token"
+      ADMINS: "1"
+      SMTP_USER: "ci@example.com"
+      SMTP_PASS: "ci"
+      POSTGRES_PASSWORD: "ci"
     steps:
-      - name: Execute local script
-        uses: appleboy/ssh-action@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install poetry
+        run: pipx install "poetry==2.5.1"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: poetry
+
+      - name: Install dependencies
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction
+
+      - name: Ruff
+        run: make lint
+
+      - name: Mypy
+        run: make typecheck
+
+      - name: Pytest
+        run: make test
+
+  deploy:
+    needs: checks
+    # только push в master или ручной запуск с master; на pull_request деплоя нет
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Deploy over ssh
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: 161.35.29.52
           port: 2022

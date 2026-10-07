@@ -1,23 +1,135 @@
 import asyncio
-import os
+import io
+import random
 import re
+import time
 import urllib.parse
+import zipfile
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field, replace
 from email.message import Message
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
+from src.custom_logging import get_logger
+from src.settings import settings
 
-ALL_FORMATS = ["fb2", "epub", "mobi", "pdf", "djvu"]
-SITE = "http://flibusta.is"
+logger = get_logger(__name__)
+
+ALL_FORMATS = ("fb2", "epub", "mobi", "pdf", "djvu")
+NO_AUTHOR = "[автор не указан]"
 
 HTTP_TIMEOUT = 20.0
 HTTP_RETRIES = 3
 HTTP_RETRY_DELAY = 1.0
 HTTP_MAX_CONNECTIONS = 20
 HTTP_MAX_KEEPALIVE = 10
+HTTP_USER_AGENT = "Mozilla/5.0 (compatible; flibusta-telegram-bot/0.1)"
+
+# В выдаче поиска по автору бывает до 50 человек, страница каждого — отдельный запрос
+AUTHOR_SEARCH_LIMIT = 5
+AUTHOR_SEARCH_CONCURRENCY = 3
+
+BOOK_CACHE_TTL = 600.0
+BOOK_CACHE_SIZE = 256
+
+# Лимит Telegram на фото
+COVER_MAX_SIZE = 10 * 1024 * 1024
+
+_BOOK_HREF = re.compile(r"^/b/(\d+)/?$")
+_AUTHOR_HREF = re.compile(r"^/a/(\d+)/?$")
+# «(fb2)», «(скачать pdf)»
+_FORMAT_LABEL = re.compile(r"\(\s*(?:скачать\s+)?(\w+)\s*\)")
+_FORMAT_ALIASES = {"djv": "djvu"}
+_AUTHOR_BOOK_COUNT = re.compile(r"\((\d+)\s+книг")
+_BOOK_ID_SCRIPT = re.compile(r"bookId\s*=\s*(\d+)")
 
 _client: httpx.AsyncClient | None = None
+
+
+@dataclass(slots=True)
+class Book:
+    id: str
+    title: str = ""
+    author: str = ""
+    link: str = ""
+    formats: dict[str, str] = field(default_factory=dict)
+    cover: str | None = None
+    size: str = ""
+    annotation: str = ""
+
+    def __str__(self) -> str:
+        return f"{self.title} - {self.author} ({self.id})"
+
+
+@dataclass(slots=True)
+class DownloadedFile:
+    content: bytes
+    filename: str
+
+
+class BookTooLargeError(Exception):
+    def __init__(self, size: int | None = None) -> None:
+        super().__init__(f"file is too large: {size if size is not None else 'unknown'} bytes")
+        self.size = size
+
+
+class _BookCache:
+    def __init__(self, ttl: float, max_size: int) -> None:
+        self._ttl = ttl
+        self._max_size = max_size
+        self._items: dict[str, tuple[float, Book]] = {}
+
+    def get(self, book_id: str) -> Book | None:
+        item = self._items.get(book_id)
+
+        if item is None:
+            return None
+
+        expires_at, book = item
+
+        if expires_at <= time.monotonic():
+            del self._items[book_id]
+            return None
+
+        return _copy_book(book)
+
+    def put(self, book: Book) -> None:
+        now = time.monotonic()
+        self._items.pop(book.id, None)
+
+        if len(self._items) >= self._max_size:
+            self._items = {k: v for k, v in self._items.items() if v[0] > now}
+
+        # dict хранит порядок вставки, первый ключ — самый старый
+        while len(self._items) >= self._max_size:
+            del self._items[next(iter(self._items))]
+
+        self._items[book.id] = (now + self._ttl, _copy_book(book))
+
+    def clear(self) -> None:
+        self._items.clear()
+
+
+def _copy_book(book: Book) -> Book:
+    return replace(book, formats=dict(book.formats))
+
+
+_book_cache = _BookCache(BOOK_CACHE_TTL, BOOK_CACHE_SIZE)
+
+
+def _create_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=HTTP_TIMEOUT,
+        follow_redirects=True,
+        headers={"User-Agent": HTTP_USER_AGENT},
+        limits=httpx.Limits(
+            max_connections=HTTP_MAX_CONNECTIONS,
+            max_keepalive_connections=HTTP_MAX_KEEPALIVE,
+        ),
+        transport=transport,
+    )
 
 
 def get_client() -> httpx.AsyncClient:
@@ -25,14 +137,7 @@ def get_client() -> httpx.AsyncClient:
     global _client
 
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(
-            timeout=HTTP_TIMEOUT,
-            follow_redirects=True,
-            limits=httpx.Limits(
-                max_connections=HTTP_MAX_CONNECTIONS,
-                max_keepalive_connections=HTTP_MAX_KEEPALIVE,
-            ),
-        )
+        _client = _create_client()
 
     return _client
 
@@ -46,447 +151,389 @@ async def close_client() -> None:
     _client = None
 
 
-class Book:
-    def __init__(self, book_id):
-        self.id = book_id
-        self.title = ""
-        self.author = ""
-        self.link = ""
-        self.formats = {}
-        self.cover = ""
-        self.size = ""
-        self.annotation = ""
-
-    def __str__(self):
-        return f"{self.title} - {self.author} ({self.id})"
+def _site() -> str:
+    return settings.flibusta_url.rstrip("/")
 
 
-async def get_page(url: str) -> BeautifulSoup:
-    for attempt in range(HTTP_RETRIES):
+def _absolute(href: str) -> str:
+    return urllib.parse.urljoin(_site() + "/", href)
+
+
+def _is_retryable(status_code: int) -> bool:
+    return status_code == 429 or status_code >= 500
+
+
+async def _send(url: str, *, stream: bool = False) -> httpx.Response:
+    """GET с ретраями. При stream=True ответ закрывает вызывающий."""
+    client = get_client()
+    attempt = 0
+
+    while True:
+        attempt += 1
+        last_attempt = attempt >= HTTP_RETRIES
+
         try:
-            response = await get_client().get(url)
-            response.raise_for_status()
-
-            return BeautifulSoup(
-                response.text,
-                "html.parser",
-            )
+            response = await client.send(client.build_request("GET", url), stream=stream)
 
         # Таймауты, обрывы соединения и протухшие keep-alive соединения
         except httpx.TransportError:
-            if attempt == HTTP_RETRIES - 1:
+            if last_attempt:
                 raise
-
-            await asyncio.sleep(
-                HTTP_RETRY_DELAY * (attempt + 1)
-            )
-
-    raise RuntimeError("Failed to fetch page")
-
-
-async def scrape_books_by_title(text: str) -> list[Book] | None:
-    query_text = urllib.parse.quote(text)
-    url = f"{SITE}/booksearch?ask={query_text}&chb=on"
-
-    sp = await get_page(url)
-
-    target_div = sp.find(
-        "div",
-        attrs={"class": "clear-block", "id": "main"},
-    )
-
-    if target_div is None:
-        return None
-
-    target_ul_list = target_div.findChildren(
-        "ul",
-        attrs={"class": ""},
-    )
-
-    if len(target_ul_list) == 0:
-        return None
-
-    target_ul = target_ul_list[0]
-    li_list = target_ul.find_all("li")
-
-    link_list = [
-        SITE + li.a.get("href") + "/"
-        for li in li_list
-    ]
-
-    author_list = []
-
-    for li in li_list:
-        a_list = li.find_all("a")
-
-        if len(a_list) > 1:
-            author_list_l = a_list[1:]
-            author = ", ".join(
-                a.text for a in author_list_l
-            )
         else:
-            author = "[автор не указан]"
-
-        author_list.append(author)
-
-    title_list = [
-        li.find_all("a")[0].text
-        for li in li_list
-    ]
-
-    book_id_list = [
-        str(li.a.get("href")).replace("/b/", "")
-        for li in li_list
-    ]
-
-    result = []
-
-    for i in range(len(book_id_list)):
-        book = Book(book_id_list[i])
-        book.title = title_list[i]
-        book.author = author_list[i]
-        book.link = link_list[i]
-
-        result.append(book)
-
-    return result
-
-
-async def scrape_books_by_author(
-    text: str,
-) -> list[list[Book]] | None:
-    query_text = urllib.parse.quote(text)
-    url = f"{SITE}/booksearch?ask={query_text}&cha=on"
-
-    sp = await get_page(url)
-
-    target_div = sp.find(
-        "div",
-        attrs={"class": "clear-block", "id": "main"},
-    )
-
-    if target_div is None:
-        return None
-
-    target_ul_list = target_div.findChildren(
-        "ul",
-        attrs={"class": ""},
-    )
-
-    if len(target_ul_list) == 0:
-        return None
-
-    target_ul = target_ul_list[0]
-    li_list = target_ul.find_all("li")
-
-    authors_link_list = [
-        SITE + li.a.get("href") + "/"
-        for li in li_list
-    ]
-
-    final_res = []
-
-    for author_link in authors_link_list:
-        sp_2 = await get_page(author_link)
-
-        author_element = sp_2.find(
-            "h1",
-            attrs={"class": "title"},
-        )
-
-        if author_element is None:
-            continue
-
-        author = author_element.text
-
-        target_form = sp_2.find(
-            "form",
-            attrs={"method": "POST"},
-        )
-
-        if target_form is None:
-            continue
-
-        target_p_translates = target_form.find(
-            "h3",
-            string="Переводы",
-        )
-
-        if target_p_translates:
-            sibling = target_p_translates.next_sibling
-
-            while sibling:
-                next_sibling = sibling.next_sibling
-                sibling.extract()
-                sibling = next_sibling
-
-        target_checkbox_list_2 = target_form.findChildren("svg")
-        target_a_list_2 = []
-
-        for cb in target_checkbox_list_2:
-            element = cb.find_next_sibling("a")
-
-            if element:
-                target_a_list_2.append(element)
-
-        if len(target_a_list_2) == 0:
-            continue
-
-        books_list_2 = [
-            SITE + a.get("href") + "/"
-            for a in target_a_list_2
-        ]
-
-        title_list = [
-            a.text
-            for a in target_a_list_2
-        ]
-
-        book_id_list = [
-            str(a.get("href")).replace("/b/", "")
-            for a in target_a_list_2
-        ]
-
-        result = []
-
-        for i in range(len(book_id_list)):
-            book = Book(book_id_list[i])
-            book.title = title_list[i]
-            book.author = author
-            book.link = books_list_2[i]
-
-            result.append(book)
-
-        final_res.append(result)
-
-    return final_res
-
-
-async def scrape_books_mbl(
-    title: str,
-    author: str,
-) -> list[Book] | None:
-    title_q = urllib.parse.quote(title)
-    author_q = urllib.parse.quote(author)
-
-    url = (
-        f"{SITE}/makebooklist"
-        f"?ab=ab1"
-        f"&t={title_q}"
-        f"&ln={author_q}"
-        f"&sort=sd2"
-    )
-
-    sp = await get_page(url)
-
-    target_form = sp.find(
-        "form",
-        attrs={"name": "bk"},
-    )
-
-    if target_form is None:
-        return None
-
-    div_list = target_form.find_all("div")
-
-    link_list = []
-    title_list = []
-    book_id_list = []
-    author_list = []
-
-    for div in div_list:
-        book_link_element = div.find(
-            "a",
-            attrs={"href": re.compile("/b/")},
-        )
-
-        if book_link_element is None:
-            continue
-
-        b_href = book_link_element.get("href")
-
-        link = SITE + b_href + "/"
-        link_list.append(link)
-
-        book_title = book_link_element.text
-        title_list.append(book_title)
-
-        book_id = b_href.replace("/b/", "")
-        book_id_list.append(book_id)
-
-        a_list = div.find_all(
-            "a",
-            attrs={"href": re.compile("/a/")},
-        )
-
-        if len(a_list) == 1:
-            book_author = a_list[0].text
-        elif len(a_list) > 1:
-            author_list_l = a_list[1:]
-            book_author = ", ".join(
-                a.text for a in author_list_l[::-1]
-            )
-        else:
-            book_author = "[автор не указан]"
-
-        author_list.append(book_author)
-
-    result = []
-
-    for i in range(len(book_id_list)):
-        book = Book(book_id_list[i])
-        book.title = title_list[i]
-        book.author = author_list[i]
-        book.link = link_list[i]
-
-        result.append(book)
-
-    return result
-
-
-async def get_book_by_id(book_id: str) -> Book | None:
-    book = Book(book_id)
-    book.link = f"{SITE}/b/{book_id}/"
-
-    sp = await get_page(book.link)
-
-    target_div = sp.find(
-        "div",
-        attrs={"class": "clear-block", "id": "main"},
-    )
-
-    if target_div is None:
-        return None
-
-    target_h1 = target_div.find(
-        "h1",
-        attrs={"class": "title"},
-    )
-
-    if target_h1 is None:
-        return None
-
-    book.title = target_h1.text
-
-    if book.title == "Книги":
-        return None
-
-    size_element = sp.find(
-        "span",
-        attrs={"style": "size"},
-    )
-
-    if size_element:
-        book.size = size_element.text
-
-    target_img = target_div.find(
-        "img",
-        attrs={"alt": "Cover image"},
-    )
-
-    if target_img:
-        book.cover = SITE + target_img.get("src")
-    else:
-        book.cover = None
-
-    format_li_list = target_div.find_all(
-        "a",
-        string=re.compile(
-            r"\(.*fb2\)|\(.*epub\)|\(.*mobi\)|\(.*pdf\)|\(.*djvu\)"
-        ),
-    )
-
-    for a in format_li_list:
-        book_format = a.text
-        link = a.get("href")
-
-        book.formats[book_format] = SITE + link
-
-    author_element = target_h1.findNext("a")
-
-    if author_element:
-        book.author = author_element.text
-
-    book.annotation = ""
-
-    annotation_header = target_div.find(
-        "h2",
-        string=re.compile(
-            "Аннотация",
-            re.IGNORECASE,
-        ),
-    )
-
-    if annotation_header:
-        annotation_paragraphs = []
-
-        sibling = annotation_header.find_next_sibling()
-
-        while sibling and sibling.name != "h2":
-            if sibling.name == "p" and sibling.text.strip():
-                annotation_paragraphs.append(
-                    sibling.text.strip()
+            if response.is_success:
+                return response
+
+            await response.aclose()
+
+            if last_attempt or not _is_retryable(response.status_code):
+                response.raise_for_status()
+
+                # raise_for_status не бросает на 1xx/3xx, а тело уже закрыто
+                raise httpx.HTTPStatusError(
+                    f"Unexpected status {response.status_code} for {url}",
+                    request=response.request,
+                    response=response,
                 )
 
-            sibling = sibling.find_next_sibling()
+        delay = HTTP_RETRY_DELAY * 2 ** (attempt - 1)
+        await asyncio.sleep(delay * random.uniform(0.5, 1.5))
 
-        book.annotation = "\n\n".join(
-            annotation_paragraphs
-        )
-    else:
-        first_p = target_h1.find_next_sibling("p")
 
-        if first_p and first_p.text.strip():
-            book.annotation = first_p.text.strip()
+async def _read_limited(response: httpx.Response, max_size: int) -> bytes:
+    declared = response.headers.get("content-length", "")
+
+    if declared.isdigit() and int(declared) > max_size:
+        raise BookTooLargeError(int(declared))
+
+    chunks: list[bytes] = []
+    total = 0
+
+    # Content-Length может отсутствовать или врать, поэтому считаем и по факту
+    async for chunk in response.aiter_bytes():
+        total += len(chunk)
+
+        if total > max_size:
+            raise BookTooLargeError()
+
+        chunks.append(chunk)
+
+    return b"".join(chunks)
+
+
+async def _scrape[T](url: str, parse: Callable[[BeautifulSoup], T]) -> T:
+    response = await _send(url)
+    html = response.text
+
+    # Страницы авторов весят сотни килобайт, их разбор заметно блокирует event loop
+    return await asyncio.to_thread(lambda: parse(BeautifulSoup(html, "html.parser")))
+
+
+def _href(tag: Tag) -> str:
+    value = tag.get("href")
+
+    return value if isinstance(value, str) else ""
+
+
+def _book_id(link: Tag) -> str | None:
+    match = _BOOK_HREF.match(_href(link))
+
+    return match.group(1) if match else None
+
+
+def _is_author_link(link: Tag) -> bool:
+    return _AUTHOR_HREF.match(_href(link)) is not None
+
+
+def _join_authors(links: Iterable[Tag]) -> str:
+    return ", ".join(link.text.strip() for link in links) or NO_AUTHOR
+
+
+def _make_book(book_id: str, title: str, author: str) -> Book:
+    return Book(
+        id=book_id,
+        title=title.strip(),
+        author=author,
+        link=f"{_site()}/b/{book_id}/",
+    )
+
+
+def _unique(books: Iterable[Book]) -> list[Book]:
+    result: dict[str, Book] = {}
+
+    for book in books:
+        result.setdefault(book.id, book)
+
+    return list(result.values())
+
+
+def normalize_format(label: str) -> str | None:
+    """«(fb2)» → «fb2», «(скачать pdf)» → «pdf»; None для неподдерживаемых форматов."""
+    match = _FORMAT_LABEL.search(label)
+
+    if match is None:
+        return None
+
+    book_format = match.group(1).lower()
+    book_format = _FORMAT_ALIASES.get(book_format, book_format)
+
+    return book_format if book_format in ALL_FORMATS else None
+
+
+def _parse_title_search(soup: BeautifulSoup) -> list[Book]:
+    books = []
+
+    for li in soup.select("div#main li"):
+        links = li.select("a[href]")
+        book_id = _book_id(links[0]) if links else None
+
+        if book_id is None:
+            continue
+
+        authors = [link for link in links[1:] if _is_author_link(link)]
+        books.append(_make_book(book_id, links[0].text, _join_authors(authors)))
+
+    return _unique(books)
+
+
+def _parse_author_search(soup: BeautifulSoup) -> list[str]:
+    found: list[tuple[int, str]] = []
+
+    for li in soup.select("div#main li"):
+        link = li.select_one("a[href]")
+        match = _AUTHOR_HREF.match(_href(link)) if link else None
+
+        if match is None:
+            continue
+
+        count = _AUTHOR_BOOK_COUNT.search(li.text)
+        found.append((int(count.group(1)) if count else 0, match.group(1)))
+
+    # Сайт сортирует по имени, поэтому самого известного однофамильца
+    # среди первых может не быть: берём авторов с наибольшим числом книг
+    found.sort(key=lambda item: item[0], reverse=True)
+
+    return list(dict.fromkeys(author_id for _, author_id in found))[:AUTHOR_SEARCH_LIMIT]
+
+
+def _parse_author_page(soup: BeautifulSoup) -> list[Book]:
+    title = soup.select_one("div#main h1.title")
+    form = soup.select_one('div#main form[method="POST" i]')
+
+    if title is None or form is None:
+        return []
+
+    author = title.text.strip()
+    books = []
+
+    # Перед каждой книгой стоит svg с оценкой
+    for element in form.select("svg, h3"):
+        if element.name == "h3":
+            # Дальше идут переводы — книги других авторов
+            if element.text.strip() == "Переводы":
+                break
+
+            continue
+
+        link = element.find_next_sibling("a")
+        book_id = _book_id(link) if isinstance(link, Tag) else None
+
+        if link is None or book_id is None:
+            continue
+
+        books.append(_make_book(book_id, link.text, author))
+
+    return _unique(books)
+
+
+def _parse_book_list(soup: BeautifulSoup) -> list[Book]:
+    books = []
+
+    for div in soup.select('form[name="bk"] div'):
+        links = div.select("a[href]")
+        book_link = next((link for link in links if _book_id(link)), None)
+        book_id = _book_id(book_link) if book_link else None
+
+        if book_link is None or book_id is None:
+            continue
+
+        # Авторы перечислены после размера, до него в скобках идут переводчики
+        size = div.select_one("span[style=size]")
+        after_size = size.find_next_siblings("a") if size else links
+        authors = [link for link in after_size if isinstance(link, Tag) and _is_author_link(link)]
+
+        if not authors:
+            authors = [link for link in links if _is_author_link(link)]
+
+        books.append(_make_book(book_id, book_link.text, _join_authors(authors)))
+
+    return _unique(books)
+
+
+def _is_book_page(main: Tag, book_id: str) -> bool:
+    # На несуществующий id сайт отвечает 200 и страницей поиска «Книги по названию <id>»
+    for script in main.select("script"):
+        match = _BOOK_ID_SCRIPT.search(script.text)
+
+        if match:
+            return match.group(1) == book_id
+
+    return main.select_one(f'a[href^="/b/{book_id}/"]') is not None
+
+
+def _parse_annotation(main: Tag, title: Tag) -> str:
+    header = main.find("h2", string=re.compile("Аннотация", re.IGNORECASE))
+
+    if header is None:
+        first_p = title.find_next_sibling("p")
+
+        return first_p.text.strip() if first_p else ""
+
+    paragraphs = []
+
+    for sibling in header.next_siblings:
+        if not isinstance(sibling, Tag):
+            continue
+
+        if sibling.name == "h2":
+            break
+
+        if sibling.name == "p" and sibling.text.strip():
+            paragraphs.append(sibling.text.strip())
+
+    return "\n\n".join(paragraphs)
+
+
+def _parse_book(soup: BeautifulSoup, book_id: str) -> Book | None:
+    main = soup.select_one("div#main")
+    title = main.select_one("h1.title") if main else None
+
+    if main is None or title is None or not _is_book_page(main, book_id):
+        return None
+
+    authors = []
+
+    # Ссылки на авторов идут сразу за заголовком, до блока с жанрами
+    for sibling in title.next_siblings:
+        if not isinstance(sibling, Tag):
+            continue
+
+        if sibling.name == "div":
+            break
+
+        if sibling.name == "a" and _is_author_link(sibling):
+            authors.append(sibling)
+
+    book = _make_book(book_id, title.text, _join_authors(authors))
+    book.annotation = _parse_annotation(main, title)
+
+    size = main.select_one("span[style=size]")
+
+    if size:
+        book.size = size.text.strip()
+
+    cover = main.select_one('img[alt="Cover image"]')
+    cover_src = cover.get("src") if cover else None
+
+    if isinstance(cover_src, str) and cover_src:
+        book.cover = _absolute(cover_src)
+
+    for link in main.select(f'a[href^="/b/{book_id}/"]'):
+        book_format = normalize_format(link.text)
+
+        if book_format:
+            book.formats.setdefault(book_format, _absolute(_href(link)))
 
     return book
 
 
-async def download_book_cover(book: Book) -> str | None:
+async def search_by_title(text: str) -> list[Book]:
+    query = urllib.parse.quote(text)
+
+    return await _scrape(f"{_site()}/booksearch?ask={query}&chb=on", _parse_title_search)
+
+
+async def search_by_author(text: str) -> list[Book]:
+    query = urllib.parse.quote(text)
+    author_ids = await _scrape(f"{_site()}/booksearch?ask={query}&cha=on", _parse_author_search)
+
+    semaphore = asyncio.Semaphore(AUTHOR_SEARCH_CONCURRENCY)
+
+    async def load(author_id: str) -> list[Book] | httpx.HTTPError:
+        async with semaphore:
+            try:
+                return await _scrape(f"{_site()}/a/{author_id}", _parse_author_page)
+            except httpx.HTTPError as error:
+                logger.warning(
+                    "Failed to load author page",
+                    extra={"author_id": author_id, "error": repr(error)},
+                )
+                return error
+
+    pages = await asyncio.gather(*(load(author_id) for author_id in author_ids))
+    loaded = [page for page in pages if isinstance(page, list)]
+    errors = [page for page in pages if not isinstance(page, list)]
+
+    # Одна упавшая страница не мешает остальным, но если упали все — это сбой сайта
+    if errors and not loaded:
+        raise errors[0]
+
+    return _unique(book for page in loaded for book in page)
+
+
+async def search_by_title_and_author(title: str, author: str) -> list[Book]:
+    title_q = urllib.parse.quote(title)
+    author_q = urllib.parse.quote(author)
+    url = f"{_site()}/makebooklist?ab=ab1&t={title_q}&ln={author_q}&sort=sd2"
+
+    return await _scrape(url, _parse_book_list)
+
+
+async def get_book_by_id(book_id: str) -> Book | None:
+    # id попадает в URL, а приходит в том числе из callback_data
+    if not (book_id.isascii() and book_id.isdigit()):
+        return None
+
+    cached = _book_cache.get(book_id)
+
+    if cached is not None:
+        return cached
+
+    try:
+        book = await _scrape(f"{_site()}/b/{book_id}", lambda soup: _parse_book(soup, book_id))
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == httpx.codes.NOT_FOUND:
+            return None
+
+        raise
+
+    if book is not None:
+        _book_cache.put(book)
+
+    return book
+
+
+async def download_cover(book: Book) -> bytes | None:
     if not book.cover:
         return None
 
     try:
-        response = await get_client().get(book.cover)
-        response.raise_for_status()
-    except httpx.HTTPError:
+        response = await _send(book.cover, stream=True)
+
+        try:
+            return await _read_limited(response, COVER_MAX_SIZE)
+        finally:
+            await response.aclose()
+
+    except (httpx.HTTPError, BookTooLargeError) as error:
+        logger.warning(
+            "Failed to download cover",
+            extra={"book_id": book.id, "url": book.cover, "error": repr(error)},
+        )
         return None
 
-    c_full_path = os.path.join(
-        os.getcwd(),
-        "books",
-        book.id,
-        "cover.jpg",
-    )
 
-    os.makedirs(
-        os.path.dirname(c_full_path),
-        exist_ok=True,
-    )
-
-    with open(c_full_path, "wb") as file:
-        file.write(response.content)
-
-    return c_full_path
-
-
-async def download_book(
-    book: Book,
-    b_format: str,
-):
-    book_url = book.formats[b_format]
-
-    try:
-        response = await get_client().get(book_url)
-    except httpx.HTTPError:
-        return None
-
-    if not response.is_success:
-        return None
-
-    content_disposition = response.headers.get(
-        "content-disposition"
-    )
+def _filename(response: httpx.Response) -> str | None:
+    content_disposition = response.headers.get("content-disposition")
 
     if not content_disposition:
         return None
@@ -496,10 +543,75 @@ async def download_book(
 
     filename = message.get_filename()
 
-    if not filename:
+    return filename or None
+
+
+def _unpack_fb2(file: DownloadedFile, max_size: int) -> DownloadedFile:
+    """Сайт отдаёт fb2 в zip-архиве; если распаковать нельзя, архив уходит как есть."""
+    if not file.filename.endswith(".fb2.zip"):
+        return file
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(file.content)) as archive:
+            members = [member for member in archive.infolist() if not member.is_dir()]
+
+            if len(members) != 1 or members[0].file_size > max_size:
+                return file
+
+            with archive.open(members[0]) as source:
+                # Размер в заголовке архива может не совпадать с реальным
+                content = source.read(max_size + 1)
+    except (zipfile.BadZipFile, NotImplementedError, RuntimeError):
+        return file
+
+    if len(content) > max_size:
+        return file
+
+    return DownloadedFile(content=content, filename=file.filename.removesuffix(".zip"))
+
+
+async def download_book(
+    book: Book,
+    book_format: str,
+    *,
+    max_size: int,
+) -> DownloadedFile | None:
+    url = book.formats.get(book_format)
+    log_extra = {"book_id": book.id, "format": book_format, "url": url}
+
+    if url is None:
+        logger.warning("Book has no such format", extra=log_extra)
         return None
 
-    if filename.endswith(".fb2.zip"):
-        filename = filename.removesuffix(".zip")
+    try:
+        response = await _send(url, stream=True)
 
-    return response.content, filename
+        try:
+            filename = _filename(response)
+
+            # Вместо файла сайт может отдать HTML-страницу (книга удалена, нужен вход и т.п.)
+            if filename is None:
+                logger.warning(
+                    "Download response is not a file",
+                    extra={
+                        **log_extra,
+                        "final_url": str(response.url),
+                        "content_type": response.headers.get("content-type"),
+                    },
+                )
+                return None
+
+            content = await _read_limited(response, max_size)
+        finally:
+            await response.aclose()
+
+    except httpx.HTTPError as error:
+        logger.warning("Failed to download book", extra={**log_extra, "error": repr(error)})
+        return None
+    except BookTooLargeError as error:
+        logger.warning("Book is too large", extra={**log_extra, "size": error.size})
+        raise
+
+    file = DownloadedFile(content=content, filename=filename)
+
+    return await asyncio.to_thread(_unpack_fb2, file, max_size)
