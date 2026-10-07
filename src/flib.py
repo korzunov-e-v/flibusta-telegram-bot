@@ -20,9 +20,13 @@ logger = get_logger(__name__)
 ALL_FORMATS = ("fb2", "epub", "mobi", "pdf", "djvu")
 NO_AUTHOR = "[автор не указан]"
 
-HTTP_TIMEOUT = 20.0
-HTTP_RETRIES = 3
-HTTP_RETRY_DELAY = 1.0
+# Сайт нестабилен: примерно каждый пятый запрос зависает или отдаёт 502, при том что
+# обычный ответ приходит за 1–2 секунды. Поэтому ждём недолго и повторяем быстро.
+HTTP_TIMEOUT = httpx.Timeout(8.0, connect=5.0)
+# Файлы и обложки отдаёт другой хост, первый байт может идти дольше
+HTTP_DOWNLOAD_TIMEOUT = httpx.Timeout(20.0, connect=5.0)
+HTTP_RETRIES = 4
+HTTP_RETRY_DELAY = 0.5
 HTTP_MAX_CONNECTIONS = 20
 HTTP_MAX_KEEPALIVE = 10
 HTTP_USER_AGENT = "Mozilla/5.0 (compatible; flibusta-telegram-bot/0.1)"
@@ -166,6 +170,7 @@ def _is_retryable(status_code: int) -> bool:
 async def _send(url: str, *, stream: bool = False) -> httpx.Response:
     """GET с ретраями. При stream=True ответ закрывает вызывающий."""
     client = get_client()
+    timeout = HTTP_DOWNLOAD_TIMEOUT if stream else HTTP_TIMEOUT
     attempt = 0
 
     while True:
@@ -173,7 +178,8 @@ async def _send(url: str, *, stream: bool = False) -> httpx.Response:
         last_attempt = attempt >= HTTP_RETRIES
 
         try:
-            response = await client.send(client.build_request("GET", url), stream=stream)
+            request = client.build_request("GET", url, timeout=timeout)
+            response = await client.send(request, stream=stream)
 
         # Таймауты, обрывы соединения и протухшие keep-alive соединения
         except httpx.TransportError:
