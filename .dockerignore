@@ -1,0 +1,8 @@
+# В контекст сборки попадает только то, что нужно образу
+*
+!pyproject.toml
+!poetry.lock
+!alembic.ini
+!src/
+**/__pycache__/
+**/*.py[cod]

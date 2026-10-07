@@ -1,0 +1,13 @@
+# Оверлей для локальной разработки:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build   (или make dev)
+
+services:
+    postgres:
+        ports:
+            # только loopback: БД доступна с хоста, но не из сети
+            - "127.0.0.1:5432:5432"
+
+    tg-bot:
+        volumes:
+            # исходники с хоста поверх кода из образа; после правок — make restart
+            - ./src:/srv/src

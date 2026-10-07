@@ -1,0 +1,8 @@
+# pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10  # держать в синхроне с версией ruff в poetry.lock
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
