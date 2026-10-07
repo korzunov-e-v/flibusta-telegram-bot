@@ -4,11 +4,13 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 import httpx
-from telegram import Bot, Update
+from telegram import Bot, InlineKeyboardMarkup, Update
 from telegram.error import Conflict, Forbidden, NetworkError, RetryAfter, TelegramError, TimedOut
 
+from src.bot import callbacks as cb
 from src.bot import texts
 from src.bot.helpers import Context, safe_answer
+from src.bot.keyboards import retry_keyboard
 from src.bot.search import SearchFailed
 from src.bot.throttle import Throttled
 from src.custom_logging import get_logger
@@ -89,12 +91,21 @@ async def notify_admins(bot: Bot, error: BaseException) -> None:
             logger.warning("Failed to notify admin", extra={"admin_id": admin_id}, exc_info=True)
 
 
-async def tell_user(update: object, context: Context, text: str) -> None:
+async def tell_user(
+    update: object,
+    context: Context,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
     if not isinstance(update, Update) or update.effective_chat is None:
         return
 
     try:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=text,
+            reply_markup=reply_markup,
+        )
     except TelegramError:
         logger.warning("Failed to send error message to user", exc_info=True)
 
@@ -107,7 +118,12 @@ def _request_url(error: httpx.HTTPError) -> str | None:
         return None
 
 
-async def report_flib_error(error: Exception, update: object, context: Context) -> None:
+async def report_flib_error(
+    error: Exception,
+    update: object,
+    context: Context,
+    retry: cb.Action | None = None,
+) -> None:
     extra: dict[str, str | None] = {
         "exception_type": type(error).__name__,
         "exception": repr(error),
@@ -118,7 +134,13 @@ async def report_flib_error(error: Exception, update: object, context: Context) 
 
     logger.error("Flibusta request failed", extra=extra)
 
-    await tell_user(update, context, texts.FLIBUSTA_ERROR)
+    # сбои сайта обычно кратковременные — даём повторить то же действие одной кнопкой
+    markup = retry_keyboard(retry) if retry is not None else None
+
+    # «сайт не отвечает» говорим только про сетевой сбой, а не про ошибку в самом боте
+    text = texts.FLIBUSTA_ERROR if isinstance(error, httpx.HTTPError) else texts.UNEXPECTED_ERROR
+
+    await tell_user(update, context, text, markup)
 
 
 async def report_unexpected(update: object, context: Context, error: BaseException) -> None:
@@ -150,14 +172,20 @@ async def report_throttled(update: Update, context: Context, error: Throttled) -
 
 
 @asynccontextmanager
-async def guard(update: Update, context: Context) -> AsyncIterator[None]:
-    """Любая ошибка внутри блока заканчивается ответом пользователю."""
+async def guard(
+    update: Update,
+    context: Context,
+    retry: cb.Action | None = None,
+) -> AsyncIterator[None]:
+    """Любая ошибка внутри блока заканчивается ответом пользователю.
+
+    retry — действие для кнопки «Повторить» под сообщением о сбое сайта."""
     try:
         yield
     except Throttled as e:
         await report_throttled(update, context, e)
     except SearchFailed as e:
-        await report_flib_error(e.errors[0], update, context)
+        await report_flib_error(e.errors[0], update, context, retry)
 
         # не сетевой сбой, а, скорее всего, изменившаяся вёрстка сайта
         bug = next((err for err in e.errors if not isinstance(err, httpx.HTTPError)), None)
@@ -165,7 +193,7 @@ async def guard(update: Update, context: Context) -> AsyncIterator[None]:
         if bug is not None:
             await notify_admins(context.bot, bug)
     except httpx.HTTPError as e:
-        await report_flib_error(e, update, context)
+        await report_flib_error(e, update, context, retry)
     except Exception as e:
         await report_unexpected(update, context, e)
 

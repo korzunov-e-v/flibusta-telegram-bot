@@ -105,3 +105,22 @@ def test_decode_rejects_garbage(data: str | None) -> None:
 )
 def test_normalize_format(raw: str, expected: str) -> None:
     assert cb.normalize_format(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("action", "data"),
+    [
+        (cb.ShowBook("7"), "r:b:7"),
+        (cb.GetBook("email", "1234567", "djvu"), "r:g:e:1234567:djvu"),
+        (cb.ShowPage("abcdef12", 3), "r:p:abcdef12:3"),
+    ],
+)
+def test_retry_roundtrip(action: cb.Action, data: str) -> None:
+    assert cb.encode(cb.Retry(action)) == data
+    assert cb.decode(data) == cb.Retry(action)
+
+
+@pytest.mark.parametrize("data", ["r:", "r:n", "r:r:b:7", "r:x:1"])
+def test_retry_rejects_bad_action(data: str) -> None:
+    with pytest.raises(cb.InvalidCallbackData):
+        cb.decode(data)

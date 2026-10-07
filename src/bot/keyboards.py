@@ -56,6 +56,10 @@ def book_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
+def retry_keyboard(action: cb.Action) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[_button("🔄 Повторить", cb.Retry(action))]])
+
+
 def formats_from_keyboard(markup: InlineKeyboardMarkup | None) -> list[str]:
     """Форматы книги по кнопкам уже отправленной карточки — чтобы при
     переключении режима не ходить на сайт. Понимает и старые кнопки."""

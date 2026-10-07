@@ -1,7 +1,8 @@
 """Протокол callback_data инлайн-кнопок: всё кодирование и разбор — только здесь.
 
 Текущий формат — поля через двоеточие: ``b:<id>``, ``a:<id>``, ``m:<c|e>:<id>``,
-``g:<c|e>:<id>:<format>``, ``p:<search_id>:<page>``, ``n``.
+``g:<c|e>:<id>:<format>``, ``p:<search_id>:<page>``, ``n``, а также ``r:<действие>`` —
+повтор действия после сбоя.
 Кнопки, выпущенные до его появления (``get_book chat 123 (fb2)`` и т.п.), тоже разбираются.
 """
 
@@ -62,7 +63,17 @@ class Noop:
     pass
 
 
-Callback = ShowBook | ShowAnnotation | SwitchMode | GetBook | ShowPage | Noop
+Action = ShowBook | ShowAnnotation | SwitchMode | GetBook | ShowPage
+
+
+@dataclass(frozen=True, slots=True)
+class Retry:
+    """Кнопка «Повторить» под сообщением об ошибке."""
+
+    action: Action
+
+
+Callback = Action | Retry | Noop
 
 
 def _check_book_id(book_id: str) -> str:
@@ -121,6 +132,11 @@ def encode(callback: Callback) -> str:
             )
         case ShowPage(search_id, page):
             data = f"p:{_check_search_id(search_id)}:{_check_page(page)}"
+        case Retry(action):
+            if isinstance(action, Retry | Noop):
+                raise TypeError(f"action can not be retried: {action!r}")
+
+            data = f"r:{encode(action)}"
         case Noop():
             data = "n"
         case _:
@@ -167,6 +183,14 @@ def _decode_legacy(data: str) -> Callback:
 
 
 def _decode_current(data: str) -> Callback:
+    if data.startswith("r:"):
+        action = _decode_current(data.removeprefix("r:"))
+
+        if isinstance(action, Retry | Noop):
+            raise InvalidCallbackData(f"bad retry: {data!r}")
+
+        return Retry(action)
+
     kind, *args = data.split(":")
 
     match kind, args:

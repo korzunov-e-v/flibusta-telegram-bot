@@ -1,5 +1,6 @@
 from telegram import InlineKeyboardMarkup, Update
 
+from src.bot import callbacks as cb
 from src.bot import search, texts, throttle, verification
 from src.bot.email_flow import handle_code_input, handle_email_input
 from src.bot.errors import guard
@@ -95,16 +96,43 @@ async def search_books(update: Update, context: Context, text: str) -> None:
         },
     )
 
-    with throttle.heavy.slot(user.id):
-        async with status_message(context.bot, message.chat_id, texts.SEARCHING):
-            result = await run_search(query)
+    # запрос запоминаем до поиска: по его id работает кнопка «Повторить» после сбоя
+    search_id = remember_query(get_user_data(context), query)
+
+    async with guard(update, context, retry=cb.ShowPage(search_id, 0)):
+        await send_results(
+            context,
+            chat_id=message.chat_id,
+            user_id=user.id,
+            query=query,
+            search_id=search_id,
+        )
+
+
+async def send_results(
+    context: Context,
+    *,
+    chat_id: int,
+    user_id: int,
+    query: SearchQuery,
+    search_id: str,
+    page: int = 0,
+) -> None:
+    """Ищет (или берёт выдачу из кеша) и отправляет страницу результатов новым сообщением."""
+    bot = context.bot
+
+    with throttle.heavy.slot(user_id):
+        result = search.cache.get(user_id, search_id)
+
+        if result is None:
+            async with status_message(bot, chat_id, texts.SEARCHING):
+                result = await run_search(query)
+
+            search.cache.put(user_id, search_id, result)
 
         if not result.books:
-            await message.reply_text(nothing_found_text(query, result))
+            await bot.send_message(chat_id=chat_id, text=nothing_found_text(query, result))
             return
 
-        search_id = remember_query(get_user_data(context), query)
-        search.cache.put(user.id, search_id, result)
-
-        text, markup = render_results(result, search_id, 0)
-        await message.reply_text(text, reply_markup=markup)
+        text, markup = render_results(result, search_id, page)
+        await bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)

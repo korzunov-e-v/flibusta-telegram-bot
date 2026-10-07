@@ -6,6 +6,7 @@ from src import flib, mailer
 from src.bot import callbacks as cb
 from src.bot import texts
 from src.bot.helpers import Context, Status, status_message
+from src.bot.keyboards import retry_keyboard
 from src.custom_logging import get_logger
 from src.database import crud
 from src.settings import settings
@@ -78,7 +79,11 @@ async def deliver_book(
             return
 
         if file is None:
-            await bot.send_message(chat_id=chat_id, text=texts.DOWNLOAD_FAILED)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=texts.DOWNLOAD_FAILED,
+                reply_markup=retry_keyboard(cb.GetBook(mode, book_id, book_format)),
+            )
             return
 
         if email is not None:

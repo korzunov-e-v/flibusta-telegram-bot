@@ -11,9 +11,9 @@ from src.bot import callbacks as cb
 from src.bot import search, texts, throttle, verification
 from src.bot.delivery import deliver_book
 from src.bot.errors import guard
-from src.bot.helpers import Context, get_user_data, safe_answer, status_message
+from src.bot.helpers import Context, get_user_data, safe_answer, safe_delete, status_message
 from src.bot.keyboards import book_keyboard, formats_from_keyboard
-from src.bot.messages import nothing_found_text, render_results
+from src.bot.messages import nothing_found_text, render_results, send_results
 from src.bot.search import recall_query, run_search
 from src.custom_logging import get_logger
 from src.database import crud
@@ -39,20 +39,40 @@ async def button(update: Update, context: Context) -> None:
         await safe_answer(query, texts.STALE_BUTTON, alert=True)
         return
 
-    async with guard(update, context):
-        match callback:
-            case cb.ShowBook(book_id):
-                await show_book(query, context, chat.id, user.id, book_id)
-            case cb.ShowAnnotation(book_id):
-                await show_annotation(query, context, chat.id, user.id, book_id)
-            case cb.SwitchMode(mode, book_id):
-                await switch_mode(query, mode, book_id)
-            case cb.GetBook():
-                await get_book(query, context, chat.id, user.id, callback)
-            case cb.ShowPage(search_id, page):
-                await show_page(query, context, user.id, search_id, page)
-            case cb.Noop():
-                await safe_answer(query)
+    if isinstance(callback, cb.Noop):
+        await safe_answer(query)
+        return
+
+    is_retry = isinstance(callback, cb.Retry)
+    action = callback.action if isinstance(callback, cb.Retry) else callback
+    # переключение режима правит саму карточку, повторять его из сообщения об ошибке нечем
+    retry = None if isinstance(action, cb.SwitchMode) else action
+
+    async with guard(update, context, retry=retry):
+        throttled = False
+
+        try:
+            match action:
+                case cb.ShowBook(book_id):
+                    await show_book(query, context, chat.id, user.id, book_id)
+                case cb.ShowAnnotation(book_id):
+                    await show_annotation(query, context, chat.id, user.id, book_id)
+                case cb.SwitchMode(mode, book_id):
+                    await switch_mode(query, mode, book_id)
+                case cb.GetBook():
+                    await get_book(query, context, chat.id, user.id, action)
+                case cb.ShowPage(search_id, page) if is_retry:
+                    await retry_search(query, context, chat.id, user.id, search_id, page)
+                case cb.ShowPage(search_id, page):
+                    await show_page(query, context, user.id, search_id, page)
+        except throttle.Throttled:
+            throttled = True
+            raise
+        finally:
+            # сообщение об ошибке с кнопкой «Повторить» своё отработало: при новом сбое
+            # придёт новое. Если повтор отклонён троттлингом, кнопка остаётся.
+            if is_retry and not throttled and isinstance(query.message, Message):
+                await safe_delete(query.message)
 
 
 @contextmanager
@@ -191,6 +211,31 @@ async def get_book(
             book_id=callback.book_id,
             book_format=callback.book_format,
         )
+
+
+async def retry_search(
+    query: CallbackQuery,
+    context: Context,
+    chat_id: int,
+    user_id: int,
+    search_id: str,
+    page: int,
+) -> None:
+    search_query = recall_query(get_user_data(context), search_id)
+
+    if search_query is None:
+        await safe_answer(query, texts.STALE_SEARCH, alert=True)
+        return
+
+    await safe_answer(query)
+    await send_results(
+        context,
+        chat_id=chat_id,
+        user_id=user_id,
+        query=search_query,
+        search_id=search_id,
+        page=page,
+    )
 
 
 async def show_page(

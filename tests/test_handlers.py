@@ -12,7 +12,7 @@ from src.bot import errors, search, texts, throttle, verification
 from src.bot.buttons import button
 from src.bot.commands import cancel_command, email_command, start_command
 from src.bot.helpers import status_message
-from src.bot.keyboards import book_keyboard
+from src.bot.keyboards import book_keyboard, retry_keyboard
 from src.bot.messages import handle_text
 from src.database import crud
 from src.flib import Book, DownloadedFile
@@ -157,6 +157,75 @@ async def test_flibusta_error_is_reported_to_user(
 
     assert sent_texts(context.bot) == [texts.LOADING, texts.FLIBUSTA_ERROR]
     context.bot.send_message.return_value.delete.assert_awaited_once()
+    # под сообщением о сбое — кнопка, повторяющая то же действие
+    assert context.bot.send_message.await_args.kwargs["reply_markup"] == retry_keyboard(
+        cb.ShowBook("7")
+    )
+
+
+async def test_retry_button_repeats_action_and_removes_error_message(
+    context: MagicMock, site: dict[str, AsyncMock]
+) -> None:
+    update = make_callback_update(cb.encode(cb.Retry(cb.ShowBook("7"))))
+
+    await button(update, context)
+
+    site["get_book_by_id"].assert_awaited_once_with("7")
+    context.bot.send_photo.assert_awaited_once()
+    update.callback_query.message.delete.assert_awaited_once()
+
+
+async def test_retry_that_fails_again_offers_retry_again(
+    context: MagicMock, site: dict[str, AsyncMock]
+) -> None:
+    site["get_book_by_id"].side_effect = httpx.ReadTimeout("boom")
+    update = make_callback_update(cb.encode(cb.Retry(cb.ShowAnnotation("7"))))
+
+    await button(update, context)
+
+    assert sent_texts(context.bot)[-1] == texts.FLIBUSTA_ERROR
+    assert context.bot.send_message.await_args.kwargs["reply_markup"] == retry_keyboard(
+        cb.ShowAnnotation("7")
+    )
+    update.callback_query.message.delete.assert_awaited_once()
+
+
+async def test_throttled_retry_keeps_error_message(
+    context: MagicMock, site: dict[str, AsyncMock]
+) -> None:
+    update = make_callback_update(cb.encode(cb.Retry(cb.GetBook("chat", "7", "fb2"))))
+
+    with throttle.heavy.slot(USER_ID):
+        await button(update, context)
+
+    site["download_book"].assert_not_awaited()
+    update.callback_query.message.delete.assert_not_awaited()
+
+
+async def test_failed_search_can_be_retried(
+    context: MagicMock, site: dict[str, AsyncMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(throttle.heavy, "_min_interval", 0.0)
+    site["search_by_title"].side_effect = httpx.ReadTimeout("a")
+    site["search_by_author"].side_effect = httpx.ReadTimeout("b")
+
+    await handle_text(make_message_update("книга"), context)
+
+    (search_id,) = context.user_data[search.SEARCHES_KEY]
+    markup = context.bot.send_message.await_args.kwargs["reply_markup"]
+    assert sent_texts(context.bot)[-1] == texts.FLIBUSTA_ERROR
+    assert markup == retry_keyboard(cb.ShowPage(search_id, 0))
+
+    site["search_by_title"].side_effect = None
+    site["search_by_title"].return_value = _books(3)
+    site["search_by_author"].side_effect = None
+    update = make_callback_update(markup.inline_keyboard[0][0].callback_data)
+
+    await button(update, context)
+
+    assert sent_texts(context.bot)[-1] == "Найдено книг: 3. Выберите книгу:"
+    update.callback_query.message.delete.assert_awaited_once()
+    update.callback_query.edit_message_text.assert_not_awaited()
 
 
 async def test_unexpected_error_answers_user_and_notifies_admins(
@@ -235,6 +304,9 @@ async def test_get_book_missing_format_and_failed_download(
     site["download_book"].return_value = None
     await button(make_callback_update("g:c:7:fb2"), context)
     assert sent_texts(context.bot)[-1] == texts.DOWNLOAD_FAILED
+    assert context.bot.send_message.await_args.kwargs["reply_markup"] == retry_keyboard(
+        cb.GetBook("chat", "7", "fb2")
+    )
 
 
 async def test_get_book_while_busy_is_throttled(
@@ -454,14 +526,16 @@ async def test_search_shows_first_page(context: MagicMock, site: dict[str, Async
 
     await handle_text(update, context)
 
-    (call,) = update.effective_message.reply_text.await_args_list
+    call = context.bot.send_message.await_args_list[-1]
     markup = call.kwargs["reply_markup"]
     (search_id,) = context.user_data[search.SEARCHES_KEY]
 
-    assert call.args[0] == "Найдено книг: 25. Страница 1 из 3. Выберите книгу:"
+    assert sent_texts(context.bot) == [
+        texts.SEARCHING,
+        "Найдено книг: 25. Страница 1 из 3. Выберите книгу:",
+    ]
     assert len(markup.inline_keyboard) == 11
     assert markup.inline_keyboard[-1][-1].callback_data == f"p:{search_id}:1"
-    assert sent_texts(context.bot) == [texts.SEARCHING]
     context.bot.send_message.return_value.delete.assert_awaited_once()
 
 
@@ -470,7 +544,7 @@ async def test_search_nothing_found_and_errors(
 ) -> None:
     update = make_message_update("книга\nЛев Толстой")
     await handle_text(update, context)
-    assert replies(update) == [texts.NOTHING_FOUND + "\n\n" + texts.AUTHOR_HINT]
+    assert sent_texts(context.bot)[-1] == texts.NOTHING_FOUND + "\n\n" + texts.AUTHOR_HINT
 
     site["search_by_title"].side_effect = httpx.ConnectError("a")
     site["search_by_author"].side_effect = httpx.ConnectError("b")
@@ -478,7 +552,6 @@ async def test_search_nothing_found_and_errors(
     await handle_text(update, context)
 
     assert sent_texts(context.bot)[-1] == texts.FLIBUSTA_ERROR
-    assert search.SEARCHES_KEY not in context.user_data
 
 
 async def test_empty_text(context: MagicMock, site: dict[str, AsyncMock]) -> None:
